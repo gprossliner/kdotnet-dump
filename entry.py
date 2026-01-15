@@ -5,8 +5,8 @@ import sys
 import os
 
 # Local args
-kube_ns = "energy-promv4"
-kube_pod = "api-7798c4bdf7-68sw9"
+kube_ns = "portalecrm-a1-insuranceportal-dev"
+kube_pod = "a1-insuranceportal-bms-7c87f75456-djc9b"
 
 # Remote args
 dump_type = "mini"
