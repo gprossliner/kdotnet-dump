@@ -23,3 +23,24 @@ clrthreads
 
 # this should show the list of threads
 ```
+
+# manual test to dump in ephemeral pod:
+
+Start ephemeral pod:
+```sh
+kubectl -n energy-promv4 debug api-dd5cb7ccd-bkn86 --image mcr.microsoft.com/dotnet/sdk:10.0 -it --target api --share-processes  -- bash
+```
+
+```sh
+# install dotnet-dump
+dotnet tool install dotnet-dump
+
+# set tmpdir for socket diagnostic socket and output file
+# it will be in the target container fs, so we need to use /proc/1/root to enter
+# the containers FS
+export TMPDIR=/proc/1/root/tmp
+dotnet tool run dotnet-dump collect --process-id=1 --output /proc/1/root/tmp/core_dump
+
+# check file
+ls -l /proc/1/root/tmp
+```
