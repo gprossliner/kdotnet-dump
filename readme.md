@@ -44,3 +44,37 @@ dotnet tool run dotnet-dump collect --process-id=1 --output /proc/1/root/tmp/cor
 # check file
 ls -l /proc/1/root/tmp
 ```
+
+# testing on a hardened container (baseline)
+
+When trying to run `dotnet tool`, we get this error: 
+`System.UnauthorizedAccessException: Access to the path '/.dotnet' is denied.`
+
+Setting a target path didn't help. So we managed to create the dump using
+download with wget (which is available in the sdk image)
+
+Start debug container:
+```
+kubectl debug -n energy-promv4 api-f57cf89f7-bgvgs   --image=mcr.microsoft.com/dotnet/sdk:10.0   --target=api   --share-processes   -it -- bash
+```
+
+Run in container:
+
+```sh
+# see that we are not root, so we can't install a dotnet tool
+id
+
+# download with wget
+wget "https://aka.ms/dotnet-dump/linux-x64" -O /tmp/dotnet-dump
+
+# set export dir for dotnet-dump to run:
+export DOTNET_BUNDLE_EXTRACT_BASE_DIR=/tmp/extracted
+
+# like before
+export TMPDIR=/proc/1/root/tmp
+chmod +x /tmp/dotnet-dump
+/tmp/dotnet-dump collect --process-id=1 --output /proc/1/root/tmp/core_dump
+
+# check file
+ls -l /proc/1/root/tmp/
+```
