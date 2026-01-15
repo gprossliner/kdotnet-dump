@@ -3,15 +3,83 @@
 import subprocess
 import sys
 import os
+import argparse
+
+# Parse command line arguments
+parser = argparse.ArgumentParser(
+    description="Create and download a .NET dump from a Kubernetes pod"
+)
+parser.add_argument("pod", nargs="?", help="Pod name")
+parser.add_argument(
+    "-n", "--namespace", default="default", help="Namespace (default: default)"
+)
+parser.add_argument(
+    "-l", "--selector", help="Label selector to find pod (e.g., app=myapp)"
+)
+parser.add_argument(
+    "--dump-type",
+    default="mini",
+    choices=["mini", "heap", "triage", "full"],
+    help="Dump type (default: mini)",
+)
+parser.add_argument("--dump-pid", default="1", help="Process ID to dump (default: 1)")
+parser.add_argument(
+    "--dump-dir",
+    default="/dotnetdumps",
+    help="Directory in pod to store dumps in the container (default: /dotnetdumps)",
+)
+
+args = parser.parse_args()
 
 # Local args
-kube_ns = "portalecrm-a1-insuranceportal-dev"
-kube_pod = "a1-insuranceportal-bms-7c87f75456-djc9b"
+kube_ns = args.namespace
+kube_pod = None
+
+# Determine pod name
+if args.selector:
+    # Get pod by label selector
+    print(f"Finding pod with selector '{args.selector}' in namespace '{kube_ns}'...")
+    try:
+        result = subprocess.run(
+            [
+                "kubectl",
+                "get",
+                "pods",
+                "-n",
+                kube_ns,
+                "-l",
+                args.selector,
+                "-o",
+                "jsonpath={.items[0].metadata.name}",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        kube_pod = result.stdout.strip()
+        if not kube_pod:
+            print(
+                f"Error: No pods found with selector '{args.selector}' in namespace '{kube_ns}'",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        print(f"Found pod: {kube_pod}")
+    except subprocess.CalledProcessError as e:
+        print(f"Error: Failed to find pod with selector: {e.stderr}", file=sys.stderr)
+        sys.exit(1)
+elif args.pod:
+    kube_pod = args.pod
+else:
+    print(
+        "Error: Either pod name or --selector (-l) must be specified", file=sys.stderr
+    )
+    parser.print_help()
+    sys.exit(1)
 
 # Remote args
-dump_type = "mini"
-dump_pid = "1"
-dump_dir = "/dotnetdumps"
+dump_type = args.dump_type
+dump_pid = args.dump_pid
+dump_dir = args.dump_dir
 
 # validate if pod exists
 try:
@@ -19,10 +87,12 @@ try:
         ["kubectl", "get", "pod", "-n", kube_ns, kube_pod],
         check=True,
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL
+        stderr=subprocess.DEVNULL,
     )
 except subprocess.CalledProcessError:
-    print(f"Error: Pod {kube_pod} in namespace {kube_ns} does not exist.", file=sys.stderr)
+    print(
+        f"Error: Pod {kube_pod} in namespace {kube_ns} does not exist.", file=sys.stderr
+    )
     sys.exit(1)
 
 # Read remote.sh script
@@ -47,10 +117,13 @@ try:
     result = subprocess.run(
         ["kubectl", "exec", "-n", kube_ns, "-i", kube_pod, "--", "bash"],
         input=script_content,
-        text=True
+        text=True,
     )
     if result.returncode != 0:
-        print(f"Error: kubectl exec failed with exit code {result.returncode}", file=sys.stderr)
+        print(
+            f"Error: kubectl exec failed with exit code {result.returncode}",
+            file=sys.stderr,
+        )
         sys.exit(result.returncode)
 except FileNotFoundError:
     print("Error: kubectl not found. Please install kubectl.", file=sys.stderr)
@@ -60,10 +133,20 @@ except FileNotFoundError:
 print("Getting real path of latest_dump...")
 try:
     result = subprocess.run(
-        ["kubectl", "exec", "-n", kube_ns, kube_pod, "--", "readlink", "-f", f"{dump_dir}/latest_dump"],
+        [
+            "kubectl",
+            "exec",
+            "-n",
+            kube_ns,
+            kube_pod,
+            "--",
+            "readlink",
+            "-f",
+            f"{dump_dir}/latest_dump",
+        ],
         capture_output=True,
         text=True,
-        check=True
+        check=True,
     )
     real_path = result.stdout.strip()
     print(f"Real path: {real_path}")
@@ -79,7 +162,7 @@ print(f"Copying {filename} from pod to local directory...")
 try:
     subprocess.run(
         ["kubectl", "cp", f"{kube_ns}/{kube_pod}:{real_path}", f"./{filename}"],
-        check=True
+        check=True,
     )
     print(f"Successfully copied {filename}")
 except subprocess.CalledProcessError as e:
