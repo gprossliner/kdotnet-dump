@@ -4,6 +4,77 @@
 dump_type="${dump_type:-full}"
 dump_pid="${dump_pid:-1}"
 dump_dir="${dump_dir:-/dump}"
+strategy="${strategy:-same-container}"
+
+main() 
+{
+    echo "Dump type is set to: $dump_type"
+
+    if [ "$strategy" = "debug-container" ]; then
+        main_debug
+    elif [ "$strategy" = "same-container" ]; then
+        main_same
+    else
+        exit 1
+    fi
+}
+
+main_same() 
+{
+    echo "Running in same-container strategy"
+
+    # check if dump_dir exists
+    if [ ! -d "$dump_dir" ]; then
+        echo "Directory $dump_dir does not exist. Creating it."
+        mkdir "$dump_dir"
+    else
+        echo "Directory $dump_dir already exists."
+    fi
+
+    # navigate to /dump
+    cd "$dump_dir"
+
+
+    install_wget
+    wget_dotnet_dump
+
+    # dump PID 1
+    ./dotnet-dump collect -p $dump_pid --type=$dump_type
+
+    # get the latest created dump file
+    latest_dump_file=$(ls -t core_* | head -n 1)
+
+    # create a symlink "latest_dump" to the latest dump file
+    ln -sf $latest_dump_file latest_dump
+}
+
+main_debug()
+{
+    echo "Running in debug-container strategy"
+
+    cd /tmp
+    wget_dotnet_dump
+
+    # set export dir for dotnet-dump to run:
+    export DOTNET_BUNDLE_EXTRACT_BASE_DIR=/tmp/extracted
+
+    # like before
+    export TMPDIR=/proc/$dump_pid/root/tmp
+    chmod +x /tmp/dotnet-dump
+    /tmp/dotnet-dump collect --process-id=1 --output /proc/$dump_pid/root/tmp/core_dump
+
+    # dump PID 1 from the original container
+    ./dotnet-dump collect -p $dump_pid --type=$dump_type --process-name=1
+
+    # get the latest created dump file
+    latest_dump_file=$(ls -t core_* | head -n 1)
+
+    # create a symlink "latest_dump" to the latest dump file
+    ln -sf $latest_dump_file latest_dump
+
+    # check file
+    ls -l /proc/$dump_pid/root/tmp/
+}
 
 # Function to install wget based on available package manager
 install_wget() {
@@ -46,62 +117,43 @@ install_wget() {
     return 1
 }
 
-echo "Dump type is set to: $dump_type"
+wget_dotnet_dump() {
 
-# check if directory /dump exists
-if [ ! -d "$dump_dir" ]; then
-  echo "Directory $dump_dir does not exist. Creating it."
-  mkdir "$dump_dir"
-else
-  echo "Directory $dump_dir already exists."
-fi
+    # check if file ./dotnet-dump exists
+    if [ ! -f ./dotnet-dump ]; then
+        echo "File ./dotnet-dump does not exist. Downloading it."
+        
+        # Detect architecture and libc
+        arch=$(uname -m)
+        if [ -f /etc/alpine-release ]; then
+            libc_type="musl"
+        else
+            libc_type="glibc"
+        fi
+        
+        echo "Detected architecture: $arch, libc: $libc_type"
+        
+        # Determine the correct download URL
+        if [ "$arch" = "x86_64" ] && [ "$libc_type" = "glibc" ]; then
+            url="https://aka.ms/dotnet-dump/linux-x64"
+        elif [ "$arch" = "x86_64" ] && [ "$libc_type" = "musl" ]; then
+            url="https://aka.ms/dotnet-dump/linux-musl-x64"
+        elif [ "$arch" = "aarch64" ] && [ "$libc_type" = "glibc" ]; then
+            url="https://aka.ms/dotnet-dump/linux-arm64"
+        elif [ "$arch" = "aarch64" ] && [ "$libc_type" = "musl" ]; then
+            url="https://aka.ms/dotnet-dump/linux-musl-arm64"
+        else
+            echo "Error: Unsupported architecture/libc combination: $arch/$libc_type"
+            exit 1
+        fi
+        
+        install_wget
 
-# navigate to /dump
-cd "$dump_dir"
-
-# check if file ./dotnet-dump exists
-if [ ! -f ./dotnet-dump ]; then
-    echo "File ./dotnet-dump does not exist. Downloading it."
-    
-    # Detect architecture and libc
-    arch=$(uname -m)
-    if [ -f /etc/alpine-release ]; then
-        libc_type="musl"
-    else
-        libc_type="glibc"
+        echo "Downloading dotnet-dump from $url"
+        wget -O dotnet-dump "$url"
+        chmod 777 ./dotnet-dump
+        
     fi
-    
-    echo "Detected architecture: $arch, libc: $libc_type"
-    
-    # Determine the correct download URL
-    if [ "$arch" = "x86_64" ] && [ "$libc_type" = "glibc" ]; then
-        url="https://aka.ms/dotnet-dump/linux-x64"
-    elif [ "$arch" = "x86_64" ] && [ "$libc_type" = "musl" ]; then
-        url="https://aka.ms/dotnet-dump/linux-musl-x64"
-    elif [ "$arch" = "aarch64" ] && [ "$libc_type" = "glibc" ]; then
-        url="https://aka.ms/dotnet-dump/linux-arm64"
-    elif [ "$arch" = "aarch64" ] && [ "$libc_type" = "musl" ]; then
-        url="https://aka.ms/dotnet-dump/linux-musl-arm64"
-    else
-        echo "Error: Unsupported architecture/libc combination: $arch/$libc_type"
-        exit 1
-    fi
-    
-    install_wget
+}
 
-    echo "Downloading dotnet-dump from $url"
-    wget -O dotnet-dump "$url"
-    chmod 777 ./dotnet-dump
-    
-fi
-
-# dump PID 1
-./dotnet-dump collect -p $dump_pid --type=$dump_type
-
-# get the latest created dump file
-latest_dump_file=$(ls -t core_* | head -n 1)
-
-# create a symlink "latest_dump" to the latest dump file
-ln -sf $latest_dump_file latest_dump
-
-# ls -la 
+main

@@ -9,6 +9,17 @@ import argparse
 parser = argparse.ArgumentParser(
     description="Create and download a .NET dump from a Kubernetes pod"
 )
+
+# add a "strategy" argument:
+#   --strategy same-container: install dotnet-dump in the same container as the app, requires only `exec`, but root container
+#   --strategy debug-container: install use a ephemeral debug container to run dotnet-dump, requires RBAC, but works with non-root containers
+parser.add_argument(
+    "--strategy",
+    choices=["same-container", "debug-container"],
+    default="debug-container",
+    help="Strategy to create the dump (default: debug-container)",
+)
+
 parser.add_argument("pod", nargs="?", help="Pod name")
 parser.add_argument(
     "-n", "--namespace", default="default", help="Namespace (default: default)"
@@ -80,6 +91,7 @@ else:
 dump_type = args.dump_type
 dump_pid = args.dump_pid
 dump_dir = args.dump_dir
+strategy = args.strategy
 
 # validate if pod exists
 try:
@@ -107,6 +119,7 @@ except FileNotFoundError:
 script_content = f"""dump_type="{dump_type}"
 dump_pid="{dump_pid}"
 dump_dir="{dump_dir}"
+strategy="{strategy}"
 
 {remote_script}
 """
