@@ -9,6 +9,7 @@ strategy="${strategy:-same-container}"
 main() 
 {
     echo "Dump type is set to: $dump_type"
+    mkdir -p "$dump_dir"
 
     if [ "$strategy" = "debug-container" ]; then
         main_debug
@@ -39,13 +40,7 @@ main_same()
     wget_dotnet_dump
 
     # dump PID 1
-    ./dotnet-dump collect -p $dump_pid --type=$dump_type
-
-    # get the latest created dump file
-    latest_dump_file=$(ls -t core_* | head -n 1)
-
-    # create a symlink "latest_dump" to the latest dump file
-    ln -sf $latest_dump_file latest_dump
+    ./dotnet-dump collect -p $dump_pid --type=$dump_type --output $dump_dir/latest_dump
 }
 
 main_debug()
@@ -58,22 +53,10 @@ main_debug()
     # set export dir for dotnet-dump to run:
     export DOTNET_BUNDLE_EXTRACT_BASE_DIR=/tmp/extracted
 
-    # like before
+    # set TMPDIR /tmp shared with the original container
     export TMPDIR=/proc/$dump_pid/root/tmp
-    chmod +x /tmp/dotnet-dump
-    /tmp/dotnet-dump collect --process-id=1 --output /proc/$dump_pid/root/tmp/core_dump
+    ./dotnet-dump collect -p $dump_pid --type=$dump_type --output $dump_dir/latest_dump
 
-    # dump PID 1 from the original container
-    ./dotnet-dump collect -p $dump_pid --type=$dump_type --process-name=1
-
-    # get the latest created dump file
-    latest_dump_file=$(ls -t core_* | head -n 1)
-
-    # create a symlink "latest_dump" to the latest dump file
-    ln -sf $latest_dump_file latest_dump
-
-    # check file
-    ls -l /proc/$dump_pid/root/tmp/
 }
 
 # Function to install wget based on available package manager
@@ -157,3 +140,4 @@ wget_dotnet_dump() {
 }
 
 main
+exit 0

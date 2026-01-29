@@ -34,11 +34,6 @@ parser.add_argument(
     help="Dump type (default: mini)",
 )
 parser.add_argument("--dump-pid", default="1", help="Process ID to dump (default: 1)")
-parser.add_argument(
-    "--dump-dir",
-    default="/dotnetdumps",
-    help="Directory in pod to store dumps in the container (default: /dotnetdumps)",
-)
 
 args = parser.parse_args()
 
@@ -87,12 +82,6 @@ else:
     parser.print_help()
     sys.exit(1)
 
-# Remote args
-dump_type = args.dump_type
-dump_pid = args.dump_pid
-dump_dir = args.dump_dir
-strategy = args.strategy
-
 # validate if pod exists
 try:
     subprocess.run(
@@ -107,7 +96,19 @@ except subprocess.CalledProcessError:
     )
     sys.exit(1)
 
-# Read remote.sh script
+# prepare script
+################################################################
+
+# args
+dump_type = args.dump_type
+dump_pid = args.dump_pid
+strategy = args.strategy
+
+if strategy == "same-container":
+    dump_dir = "/tmp/dumps"
+elif strategy == "debug-container":
+    dump_dir = f"/proc/{dump_pid}/root/tmp/dumps"
+
 try:
     with open("remote.sh", "r") as f:
         remote_script = f.read()
@@ -125,59 +126,64 @@ strategy="{strategy}"
 """
 
 # Execute the script in the container
-print(f"Executing script in pod {kube_pod} (namespace: {kube_ns})...")
-try:
-    result = subprocess.run(
-        ["kubectl", "exec", "-n", kube_ns, "-i", kube_pod, "--", "bash"],
-        input=script_content,
-        text=True,
-    )
-    if result.returncode != 0:
-        print(
-            f"Error: kubectl exec failed with exit code {result.returncode}",
-            file=sys.stderr,
+if strategy == "same-container":
+    print(f"Executing script in pod {kube_pod} (namespace: {kube_ns})...")
+    try:
+        result = subprocess.run(
+            ["kubectl", "exec", "-n", kube_ns, "-i", kube_pod, "--", "bash"],
+            input=script_content,
+            text=True,
         )
-        sys.exit(result.returncode)
-except FileNotFoundError:
-    print("Error: kubectl not found. Please install kubectl.", file=sys.stderr)
-    sys.exit(1)
+        if result.returncode != 0:
+            print(
+                f"Error: kubectl exec failed with exit code {result.returncode}",
+                file=sys.stderr,
+            )
+            sys.exit(result.returncode)
+    except FileNotFoundError:
+        print("Error: kubectl not found. Please install kubectl.", file=sys.stderr)
+        sys.exit(1)
 
-# Get the real path of the symlink
-print("Getting real path of latest_dump...")
-try:
-    result = subprocess.run(
-        [
-            "kubectl",
-            "exec",
-            "-n",
-            kube_ns,
-            kube_pod,
-            "--",
-            "readlink",
-            "-f",
-            f"{dump_dir}/latest_dump",
-        ],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    real_path = result.stdout.strip()
-    print(f"Real path: {real_path}")
-except subprocess.CalledProcessError as e:
-    print(f"Error: Failed to get real path: {e.stderr}", file=sys.stderr)
-    sys.exit(1)
+elif strategy == "debug-container":
+    print(f"Creating debug container in pod {kube_pod} (namespace: {kube_ns})...")
+    try:
+        result = subprocess.run(
+            [
+                "kubectl",
+                "debug",
+                "-n",
+                kube_ns,
+                kube_pod,
+                "--image=mcr.microsoft.com/dotnet/sdk:10.0",
+                "--target=api",
+                "--share-processes",
+                "-i",
+                "--",
+                "bash",
+            ],
+            input=script_content,
+            text=True,
+        )
+        if result.returncode != 0:
+            print(
+                f"Error: kubectl debug failed with exit code {result.returncode}",
+                file=sys.stderr,
+            )
+            sys.exit(result.returncode)
+    except FileNotFoundError:
+        print("Error: kubectl not found. Please install kubectl.", file=sys.stderr)
+        sys.exit(1)
 
-# Get the filename only for local file
-filename = os.path.basename(real_path)
-
+dump_file = dump_dir + "/latest_dump"
+local_file = "./latest_dump"
 # Copy the actual file
-print(f"Copying {filename} from pod to local directory...")
+print(f"Copying {dump_file} from pod to local directory...")
 try:
     subprocess.run(
-        ["kubectl", "cp", f"{kube_ns}/{kube_pod}:{real_path}", f"./{filename}"],
+        ["kubectl", "cp", f"{kube_ns}/{kube_pod}:{dump_file}", local_file],
         check=True,
     )
-    print(f"Successfully copied {filename}")
+    print(f"Successfully copied {os.path.basename(dump_file)} to {local_file}")
 except subprocess.CalledProcessError as e:
     print(f"Error: Failed to copy file: {e.stderr}")
     sys.exit(1)
