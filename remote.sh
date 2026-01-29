@@ -37,8 +37,14 @@ main()
     install_wget
     wget_dotnet_dump
 
+    rm -rf $dump_dir/latest_dump
+
     # dump PID 1
     ./dotnet-dump collect -p $dump_pid --type=$dump_type --output $dump_dir/latest_dump
+
+    # show diag
+    ls -l $dump_dir
+    md5sum $dump_dir/latest_dump
 }
 
 # Function to install wget based on available package manager

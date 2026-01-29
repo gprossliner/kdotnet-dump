@@ -1,1 +1,4 @@
 core_*
+
+__pycache__/
+latest_dump
