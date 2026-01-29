@@ -4,6 +4,7 @@ import subprocess
 import sys
 import os
 import argparse
+import json
 
 # Parse command line arguments
 parser = argparse.ArgumentParser(
@@ -35,11 +36,17 @@ parser.add_argument(
 )
 parser.add_argument("--dump-pid", default="1", help="Process ID to dump (default: 1)")
 
+parser.add_argument(
+    "--debug-image", help="Debug container image to use (default mcr.microsoft.com/dotnet/sdk:latest)",
+    default="mcr.microsoft.com/dotnet/sdk:latest",
+)
+
 args = parser.parse_args()
 
 # Local args
 kube_ns = args.namespace
 kube_pod = None
+container_name = None
 
 # Determine pod name
 if args.selector:
@@ -82,19 +89,79 @@ else:
     parser.print_help()
     sys.exit(1)
 
-# validate if pod exists
+# validate if pod exists and get pod details
 try:
-    subprocess.run(
-        ["kubectl", "get", "pod", "-n", kube_ns, kube_pod],
+    result = subprocess.run(
+        ["kubectl", "get", "pod", "-n", kube_ns, kube_pod, "-o", "json"],
         check=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
     )
+    pod_data = json.loads(result.stdout)
 except subprocess.CalledProcessError:
     print(
         f"Error: Pod {kube_pod} in namespace {kube_ns} does not exist.", file=sys.stderr
     )
     sys.exit(1)
+except json.JSONDecodeError as e:
+    print(f"Error: Failed to parse pod data: {e}", file=sys.stderr)
+    sys.exit(1)
+
+# Extract default container name
+containers = pod_data.get("spec", {}).get("containers", [])
+if not containers:
+    print(f"Error: No containers found in pod {kube_pod}", file=sys.stderr)
+    sys.exit(1)
+
+# Default container is the first one, or one with specific annotation
+default_container = containers[0].get("name")
+annotations = pod_data.get("metadata", {}).get("annotations", {})
+if "kubectl.kubernetes.io/default-container" in annotations:
+    default_container = annotations["kubectl.kubernetes.io/default-container"]
+
+
+if container_name is None:
+    print(f"Using default container: {default_container}")
+    container_name = default_container
+
+# Extract UID/GID from status.containerStatuses (actual runtime values)
+container_statuses = pod_data.get("status", {}).get("containerStatuses", [])
+uid = None
+gid = None
+
+# Find the container status for the default container
+for container_status in container_statuses:
+    if container_status.get("name") == container_name:
+        # Get user info from container status
+        user_info = container_status.get("user", {})
+        if "linux" in user_info:
+            uid = user_info["linux"].get("uid")
+            gid = user_info["linux"].get("gid")
+        break
+
+# Fallback to spec if status doesn't have the info (old k8s versions)
+if uid is None or gid is None:
+    container_spec = None
+    for container in containers:
+        if container.get("name") == container_name:
+            container_spec = container
+            break
+    
+    if container_spec:
+        security_context = container_spec.get("securityContext", {})
+        pod_security_context = pod_data.get("spec", {}).get("securityContext", {})
+        
+        if uid is None:
+            uid = security_context.get("runAsUser") or pod_security_context.get("runAsUser")
+        if gid is None:
+            gid = security_context.get("runAsGroup") or pod_security_context.get("runAsGroup")
+
+if uid:
+    print(f"Container runs as UID: {uid}")
+if gid:
+    print(f"Container runs as GID: {gid}")
+if not uid and not gid:
+    print("Container runs as root or UID/GID not explicitly set")
 
 # prepare script
 ################################################################
@@ -145,34 +212,65 @@ if strategy == "same-container":
         sys.exit(1)
 
 elif strategy == "debug-container":
-    print(f"Creating debug container in pod {kube_pod} (namespace: {kube_ns})...")
+    print(f"Creating debug container using image {args.debug_image}...")
+    
+    # Build kubectl debug command
+    debug_cmd = [
+        "kubectl",
+        "debug",
+        "-n",
+        kube_ns,
+        kube_pod,
+        f"--image={args.debug_image}",
+        f"--target={container_name}",
+        "--share-processes",
+        "-i",
+    ]
+    
+    # Add custom security context if UID/GID is set
+    custom_file = None
+    if uid is not None or gid is not None:
+        custom_spec = { 
+            "securityContext": {
+                "runAsUser": uid,
+                "runAsGroup": gid
+            }
+        }
+
+        # Write custom spec to temp file
+        import tempfile
+        custom_file = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        json.dump(custom_spec, custom_file)
+        custom_file.close()
+        
+        debug_cmd.extend(["--custom", custom_file.name])
+        print(f"Debug container will run as UID={uid}, GID={gid}")
+    
+    debug_cmd.extend(["--", "bash"])
+    
     try:
-        result = subprocess.run(
-            [
-                "kubectl",
-                "debug",
-                "-n",
-                kube_ns,
-                kube_pod,
-                "--image=mcr.microsoft.com/dotnet/sdk:10.0",
-                "--target=api",
-                "--share-processes",
-                "-i",
-                "--",
-                "bash",
-            ],
-            input=script_content,
+        # kubectl debug doesn't stream output well with input=, so use stdin pipe
+        process = subprocess.Popen(
+            debug_cmd,
+            stdin=subprocess.PIPE,
             text=True,
         )
-        if result.returncode != 0:
+        # Send script and close stdin to trigger execution
+        process.communicate(input=script_content)
+        
+        if process.returncode != 0:
             print(
-                f"Error: kubectl debug failed with exit code {result.returncode}",
+                f"Error: kubectl debug failed with exit code {process.returncode}",
                 file=sys.stderr,
             )
-            sys.exit(result.returncode)
+            sys.exit(process.returncode)
     except FileNotFoundError:
         print("Error: kubectl not found. Please install kubectl.", file=sys.stderr)
         sys.exit(1)
+    finally:
+        # Clean up temp file
+        if custom_file:
+            os.unlink(custom_file.name)
 
 dump_file = dump_dir + "/latest_dump"
 local_file = "./latest_dump"
@@ -180,7 +278,7 @@ local_file = "./latest_dump"
 print(f"Copying {dump_file} from pod to local directory...")
 try:
     subprocess.run(
-        ["kubectl", "cp", f"{kube_ns}/{kube_pod}:{dump_file}", local_file],
+        ["kubectl", "cp", "--container", container_name, f"{kube_ns}/{kube_pod}:{dump_file}", local_file],
         check=True,
     )
     print(f"Successfully copied {os.path.basename(dump_file)} to {local_file}")

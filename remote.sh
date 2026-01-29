@@ -12,17 +12,19 @@ main()
     mkdir -p "$dump_dir"
 
     if [ "$strategy" = "debug-container" ]; then
-        main_debug
+        # set export dir for dotnet-dump to run:
+        export DOTNET_BUNDLE_EXTRACT_BASE_DIR=/tmp/extracted
+
+        # set TMPDIR /tmp shared with the original container
+        export TMPDIR=/proc/$dump_pid/root/tmp
+
+        # need /tmp as workdir
+        cd /tmp
     elif [ "$strategy" = "same-container" ]; then
-        main_same
+        cd "$dump_dir"
     else
         exit 1
     fi
-}
-
-main_same() 
-{
-    echo "Running in same-container strategy"
 
     # check if dump_dir exists
     if [ ! -d "$dump_dir" ]; then
@@ -32,31 +34,11 @@ main_same()
         echo "Directory $dump_dir already exists."
     fi
 
-    # navigate to /dump
-    cd "$dump_dir"
-
-
     install_wget
     wget_dotnet_dump
 
     # dump PID 1
     ./dotnet-dump collect -p $dump_pid --type=$dump_type --output $dump_dir/latest_dump
-}
-
-main_debug()
-{
-    echo "Running in debug-container strategy"
-
-    cd /tmp
-    wget_dotnet_dump
-
-    # set export dir for dotnet-dump to run:
-    export DOTNET_BUNDLE_EXTRACT_BASE_DIR=/tmp/extracted
-
-    # set TMPDIR /tmp shared with the original container
-    export TMPDIR=/proc/$dump_pid/root/tmp
-    ./dotnet-dump collect -p $dump_pid --type=$dump_type --output $dump_dir/latest_dump
-
 }
 
 # Function to install wget based on available package manager
