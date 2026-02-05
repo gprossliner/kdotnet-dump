@@ -1,0 +1,12 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ephemeral-containers-edit
+  labels:
+    # This label causes the ClusterRole to be aggregated to the edit role
+    rbac.authorization.k8s.io/aggregate-to-edit: "true"
+    rbac.authorization.k8s.io/aggregate-to-admin: "true"
+rules:
+- apiGroups: [""]
+  resources: ["pods/ephemeralcontainers"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
