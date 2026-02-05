@@ -3,6 +3,10 @@ name: Build Test Images
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
     build-test-image:
         runs-on: ubuntu-latest
