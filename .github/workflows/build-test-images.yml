@@ -41,4 +41,9 @@ jobs:
               sdk_image=${{ format('mcr.microsoft.com/dotnet/sdk:{0}', matrix.dotnet-version) }}
             tags: ghcr.io/gprossliner/kdotnet-dump-testapp:${{ matrix.dotnet-version }}-${{ matrix.rt-image }}
             platforms: linux/amd64,linux/arm64
+            annotations: |
+              org.opencontainers.image.source="https://github.com/gprossliner/kdotnet-dump"
+              org.opencontainers.image.description="Test application for kdotnet-dump integration tests"
+              
+
     
