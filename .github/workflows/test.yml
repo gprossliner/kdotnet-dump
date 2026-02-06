@@ -35,10 +35,15 @@ jobs:
         kubectl cluster-info
         kubectl get nodes
     
-    - name: Run tests
+    - name: Deploy test applications
+      run: |
+        kubectl apply -f testimages/tests.yaml
+        kubectl wait --for=condition=ready pod --all --timeout=120s
+    
+    - name: Run integration tests
       run: |
         cd tests
-        pytest test_dotnet_dump.py -v -s --tb=short
+        pytest test_entry.py -v -s --tb=short
     
     - name: Upload test results
       if: always()
@@ -46,6 +51,7 @@ jobs:
       with:
         name: test-results
         path: tests/test-results/
+        if-no-files-found: ignore
         
     - name: Cleanup
       if: always()
