@@ -35,11 +35,6 @@ jobs:
         kubectl cluster-info
         kubectl get nodes
     
-    - name: Deploy test applications
-      run: |
-        kubectl apply -f testimages/tests.yaml
-        kubectl wait --for=condition=ready pod --all --timeout=120s
-    
     - name: Run integration tests
       run: |
         cd tests
