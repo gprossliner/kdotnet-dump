@@ -1,0 +1,221 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-noble-root
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: test-noble-root
+  template:
+    metadata:
+      labels:
+        app: test-noble-root
+    spec:
+      containers:
+      - name: test
+        image: ghcr.io/gprossliner/kdotnet-dump-testapp:10.0-noble
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "125m"
+          limits:
+            memory: "128Mi"
+            cpu: "125m"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-noble-restricted
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: test-noble-restricted
+  template:
+    metadata:
+      labels:
+        app: test-noble-restricted
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: test
+        image: ghcr.io/gprossliner/kdotnet-dump-testapp:10.0-noble
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "125m"
+          limits:
+            memory: "128Mi"
+            cpu: "125m"
+        securityContext:
+          # readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-alpine-root
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: test-alpine-root
+  template:
+    metadata:
+      labels:
+        app: test-alpine-root
+    spec:
+      containers:
+      - name: test
+        image: ghcr.io/gprossliner/kdotnet-dump-testapp:10.0-alpine3.22
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "125m"
+          limits:
+            memory: "128Mi"
+            cpu: "125m"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-alpine-restricted
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: test-alpine-restricted
+  template:
+    metadata:
+      labels:
+        app: test-alpine-restricted
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: test
+        image: ghcr.io/gprossliner/kdotnet-dump-testapp:10.0-alpine3.22
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "125m"
+          limits:
+            memory: "128Mi"
+            cpu: "125m"
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-alpine-restricted-readonlyfs
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: test-alpine-restricted-readonlyfs
+  template:
+    metadata:
+      labels:
+        app: test-alpine-restricted-readonlyfs
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: test
+        image: ghcr.io/gprossliner/kdotnet-dump-testapp:10.0-alpine3.22
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "125m"
+          limits:
+            memory: "128Mi"
+            cpu: "125m"
+        securityContext:
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: tmp
+        emptyDir: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-chiseled-restricted
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: test-chiseled-restricted
+  template:
+    metadata:
+      labels:
+        app: test-chiseled-restricted
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: test
+        image: ghcr.io/gprossliner/kdotnet-dump-testapp:10.0-noble-chiseled
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "125m"
+          limits:
+            memory: "128Mi"
+            cpu: "125m"
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault

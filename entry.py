@@ -235,7 +235,7 @@ elif strategy == "debug-container":
     
     # Add custom security context if UID/GID is set
     custom_file = None
-    if uid is not None or gid is not None:
+    if uid is not None and uid != 0:
         custom_spec = { 
             "securityContext": {
                 "runAsUser": uid,
@@ -420,7 +420,7 @@ def kubectl_chunked_cp(namespace, pod, container, remote_file, local_file, chunk
             while offset < total_size:
                 chunk_num += 1
                 bytes_to_read = min(chunk_size, total_size - offset)
-                print(f"Downloading chunk {chunk_num} (offset {offset}, size {bytes_to_read} bytes)...")
+                # print(f"Downloading chunk {chunk_num} (offset {offset}, size {bytes_to_read} bytes)...")
                 
                 # Read chunk using dd and base64 encode it to avoid binary issues over websocket
                 read_cmd = [

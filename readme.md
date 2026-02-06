@@ -55,7 +55,7 @@ download with wget (which is available in the sdk image)
 
 Start debug container:
 ```
-kubectl debug -n energy-promv4 api-f57cf89f7-bgvgs   --image=mcr.microsoft.com/dotnet/sdk:10.0   --target=api   --share-processes   -it -- bash
+kubectl debug -n energy-promv4 api-f57cf89f7-bgvgs  --image=mcr.microsoft.com/dotnet/sdk:10.0  --target=api   --share-processes -it -- bash
 ```
 
 Run in container:

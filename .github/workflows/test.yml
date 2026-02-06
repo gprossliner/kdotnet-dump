@@ -1,0 +1,53 @@
+name: Integration Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        pip install -r tests/requirements.txt
+    
+    - name: Create kind cluster
+      uses: helm/kind-action@v1
+      with:
+        cluster_name: kdotnet-dump-test
+        wait: 120s
+    
+    - name: Verify cluster
+      run: |
+        kubectl cluster-info
+        kubectl get nodes
+    
+    - name: Run tests
+      run: |
+        cd tests
+        pytest test_dotnet_dump.py -v -s --tb=short
+    
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-results
+        path: tests/test-results/
+        
+    - name: Cleanup
+      if: always()
+      run: |
+        kind delete cluster --name kdotnet-dump-test || true
