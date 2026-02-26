@@ -19,8 +19,14 @@ Creating .NET dumps from containers running in Kubernetes can be challenging, es
 ## Installation
 
 ```bash
-git clone https://github.com/gprossliner/kdotnet-dump.git
+pip install kdotnet-dump
+```
+
+If you want to install from local sources (e.g. for debugging), you can also use
+```bash
+it clone https://github.com/gprossliner/kdotnet-dump.git
 cd kdotnet-dump
+pip install -e .
 ```
 
 No additional dependencies required - just Python 3 and `kubectl`.
@@ -28,7 +34,7 @@ No additional dependencies required - just Python 3 and `kubectl`.
 ## Command Line Arguments
 
 ```
-usage: entry.py [-h] [--strategy {same-container,debug-container}]
+usage: kdotnet-dump [-h] [--strategy {same-container,debug-container}]
                 [-n NAMESPACE] [-l SELECTOR] [--dump-type {mini,heap,triage,full}]
                 [--dump-pid DUMP_PID] [--debug-image DEBUG_IMAGE]
                 [pod]
@@ -71,7 +77,7 @@ optional arguments:
 ### Basic Usage - Find pod by label selector
 
 ```bash
-python3 entry.py -n production -l app=api --dump-type mini
+kdotnet-dump -n production -l app=api --dump-type mini
 ```
 
 This will:
@@ -83,25 +89,25 @@ This will:
 ### Specify pod name directly
 
 ```bash
-python3 entry.py -n production my-app-pod-12345 --dump-type full
+kdotnet-dump -n production my-app-pod-12345 --dump-type full
 ```
 
 ### Create full heap dump for memory analysis
 
 ```bash
-python3 entry.py -l app=api --dump-type heap
+kdotnet-dump -l app=api --dump-type heap
 ```
 
 ### Use custom debug image (e.g., specific .NET SDK version)
 
 ```bash
-python3 entry.py -l app=api --debug-image mcr.microsoft.com/dotnet/sdk:8.0
+kdotnet-dump -l app=api --debug-image mcr.microsoft.com/dotnet/sdk:8.0
 ```
 
 ### Use same-container strategy (requires root)
 
 ```bash
-python3 entry.py -l app=api --strategy same-container --dump-type mini
+kdotnet-dump -l app=api --strategy same-container --dump-type mini
 ```
 
 ## Analyzing Dumps
