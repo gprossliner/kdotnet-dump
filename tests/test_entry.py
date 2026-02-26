@@ -4,7 +4,6 @@ Integration tests for entry.py against test deployments
 """
 
 import subprocess
-import os
 import pytest
 import yaml
 from pathlib import Path
@@ -12,7 +11,7 @@ from pathlib import Path
 
 # Path to project root
 PROJECT_ROOT = Path(__file__).parent.parent
-ENTRY_PY = PROJECT_ROOT / "entry.py"
+ENTRY_PY = PROJECT_ROOT / "src" / "kdotnet_dump" / "cli.py"
 TEST_MANIFEST = PROJECT_ROOT / "tests" / "manifest.yaml"
 
 

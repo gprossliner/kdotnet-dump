@@ -11,7 +11,7 @@
             "request": "launch",
             "program": "${file}",
             "console": "integratedTerminal",
-            "args": "-n energy-promv4 -l app=api --strategy=debug-container --dump-type mini"
+            "args": "-l app=test-noble-root --strategy=debug-container --dump-type mini"
         }
     ]
 }

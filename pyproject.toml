@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling >= 1.26", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "kdotnet-dump"
+dynamic = ["version"]
+description = "CLI tool for dumping dotnet processes running in kubernetes pods"
+authors = [
+    { name = "Günter Prossliner", email = "6724584+gprossliner@users.noreply.github.com" }
+]
+readme = "readme.md"
+requires-python = ">=3.11"
+dependencies = []
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+license = "MIT"
+
+[project.scripts]
+kdotnet-dump = "kdotnet_dump.cli:main"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kdotnet_dump"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/kdotnet_dump/remote.sh" = "kdotnet_dump/remote.sh"

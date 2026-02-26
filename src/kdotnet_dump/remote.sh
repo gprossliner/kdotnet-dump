@@ -49,83 +49,93 @@ main()
 
 # Function to install wget based on available package manager
 install_wget() {
+    # Check if wget is already available
     if command -v wget >/dev/null 2>&1; then
-        echo "wget is already installed"
+        echo "wget is already installed."
         return 0
     fi
-    
-    echo "wget not found, attempting to install..."
-    
-    # Try apt (Debian/Ubuntu)
-    if command -v apt >/dev/null 2>&1; then
-        echo "Using apt package manager"
-        apt update && apt install -y wget
+
+    echo "wget not found. Attempting to install..."
+
+    # Try apt-get (Debian/Ubuntu)
+    if command -v apt-get >/dev/null 2>&1; then
+        echo "Using apt-get to install wget..."
+        apt-get update && apt-get install -y wget
         return $?
     fi
-    
+
     # Try apk (Alpine)
     if command -v apk >/dev/null 2>&1; then
-        echo "Using apk package manager"
+        echo "Using apk to install wget..."
         apk add --no-cache wget
         return $?
     fi
-    
-    # Try tdnf (Azure Linux/CBL-Mariner)
+
+    # Try tdnf (Photon OS / mariner)
     if command -v tdnf >/dev/null 2>&1; then
-        echo "Using tdnf package manager"
+        echo "Using tdnf to install wget..."
         tdnf install -y wget
         return $?
     fi
-    
-    # Try yum (RHEL/CentOS)
+
+    # Try yum (RHEL/CentOS/Fedora)
     if command -v yum >/dev/null 2>&1; then
-        echo "Using yum package manager"
+        echo "Using yum to install wget..."
         yum install -y wget
         return $?
     fi
-    
-    echo "Error: No supported package manager found (apt, apk, tdnf, yum)"
+
+    echo "Error: No supported package manager found (apt-get, apk, tdnf, yum)."
     return 1
 }
 
 wget_dotnet_dump() {
-
-    # check if file ./dotnet-dump exists
-    if [ ! -f ./dotnet-dump ]; then
-        echo "File ./dotnet-dump does not exist. Downloading it."
-        
-        # Detect architecture and libc
-        arch=$(uname -m)
-        if [ -f /etc/alpine-release ]; then
-            libc_type="musl"
-        else
-            libc_type="glibc"
-        fi
-        
-        echo "Detected architecture: $arch, libc: $libc_type"
-        
-        # Determine the correct download URL
-        if [ "$arch" = "x86_64" ] && [ "$libc_type" = "glibc" ]; then
-            url="https://aka.ms/dotnet-dump/linux-x64"
-        elif [ "$arch" = "x86_64" ] && [ "$libc_type" = "musl" ]; then
-            url="https://aka.ms/dotnet-dump/linux-musl-x64"
-        elif [ "$arch" = "aarch64" ] && [ "$libc_type" = "glibc" ]; then
-            url="https://aka.ms/dotnet-dump/linux-arm64"
-        elif [ "$arch" = "aarch64" ] && [ "$libc_type" = "musl" ]; then
-            url="https://aka.ms/dotnet-dump/linux-musl-arm64"
-        else
-            echo "Error: Unsupported architecture/libc combination: $arch/$libc_type"
+    # Detect architecture
+    ARCH=$(uname -m)
+    case "$ARCH" in
+        x86_64)
+            DOTNET_ARCH="x64"
+            ;;
+        aarch64)
+            DOTNET_ARCH="arm64"
+            ;;
+        *)
+            echo "Unsupported architecture: $ARCH"
             exit 1
-        fi
-        
-        install_wget
+            ;;
+    esac
 
-        echo "Downloading dotnet-dump from $url"
-        wget -O dotnet-dump "$url"
-        chmod 777 ./dotnet-dump
-        
+    # Detect if glibc or musl
+    if ldd --version 2>&1 | grep -q musl; then
+        LIBC="musl"
+    else
+        LIBC="glibc"
     fi
+
+    echo "Detected architecture: $DOTNET_ARCH, libc: $LIBC"
+
+    # Construct download URL
+    BASE_URL="https://aka.ms/dotnet-dump"
+    if [ "$LIBC" = "musl" ]; then
+        DOWNLOAD_URL="${BASE_URL}/linux-musl-${DOTNET_ARCH}"
+    else
+        DOWNLOAD_URL="${BASE_URL}/linux-${DOTNET_ARCH}"
+    fi
+
+    echo "Downloading dotnet-dump from: $DOWNLOAD_URL"
+    
+    # Download dotnet-dump
+    if ! wget -O dotnet-dump "$DOWNLOAD_URL"; then
+        echo "Error: Failed to download dotnet-dump"
+        exit 1
+    fi
+
+    # Make it executable
+    chmod +x dotnet-dump
+
+    echo "dotnet-dump downloaded and made executable."
 }
 
 main
+echo "Script execution completed, PID=$$"
 exit 0
