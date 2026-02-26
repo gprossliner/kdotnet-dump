@@ -35,6 +35,9 @@ jobs:
         kubectl cluster-info
         kubectl get nodes
     
+    - name: Run installation tests
+      run: |
+        ./tests/test-install.sh
     - name: Run integration tests
       run: |
         cd tests
