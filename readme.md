@@ -125,11 +125,22 @@ dotnet-dump analyze ./latest_dump
 
 ### On macOS (using Docker)
 
-macOS doesn't support analyzing Linux dumps natively. Use a Docker container with the correct platform:
+macOS doesn't support analyzing Linux dumps natively. Use a Docker container with the correct platform.
+
+If you got the dump from a locally running kind cluster in MacOS Docker Desktop,
+the platform should be `linux/arm64`.
+
+If you got the dump from a kubernetes cluster running on Linux, you may use the
+platform `linux/amd64`.
+
+If you are not sure, you can use the `sosstatus` command to verify the platform
+of the dump.
 
 ```bash
-# For Apple Silicon (M1/M2/M3), specify linux/amd64 platform
-docker run --rm -it --platform linux/amd64 \
+# For Apple Silicon (M1/M2/M3), specify linux/arm64 platform
+# This is the correct choice if you run locally on MacOS with a kind cluster
+# For a different environment you may need to change the platform
+docker run --rm -it --platform linux/arm64 \
   -v $(pwd):/dumps \
   mcr.microsoft.com/dotnet/sdk:10.0 \
   bash
