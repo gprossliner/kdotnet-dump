@@ -3,7 +3,11 @@
 import sys
 import argparse
 
-from . import dumper
+# Support both package import and direct execution (like used in tests)
+try:
+    from . import dumper
+except ImportError:
+    import dumper
 
 def main():
     parser = argparse.ArgumentParser(

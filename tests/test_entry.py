@@ -74,7 +74,7 @@ def test_dump_creation(deployment, ensure_deployments):
     if dump_file.exists():
         dump_file.unlink()
     
-    # Run entry.py
+    # Run entry.py directly
     result = subprocess.run(
         [
             "python3", str(ENTRY_PY),
