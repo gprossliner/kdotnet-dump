@@ -18,6 +18,11 @@ classifiers = [
 ]
 license = "MIT"
 
+[project.urls]
+Homepage = "https://github.com/gprossliner/kdotnet-dump"
+Repository = "https://github.com/gprossliner/kdotnet-dump"
+Issues = "https://github.com/gprossliner/kdotnet-dump/issues"
+
 [project.scripts]
 kdotnet-dump = "kdotnet_dump.cli:main"
 

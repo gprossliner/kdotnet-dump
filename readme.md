@@ -18,13 +18,17 @@ Creating .NET dumps from containers running in Kubernetes can be challenging, es
 
 ## Installation
 
+The tool is published to [kdotnet-dump · PyPI](https://pypi.org/project/kdotnet-dump/),
+which is the prefered method of installation:
+
 ```bash
 pip install kdotnet-dump
 ```
 
 If you want to install from local sources (e.g. for debugging), you can also use
+
 ```bash
-it clone https://github.com/gprossliner/kdotnet-dump.git
+git clone https://github.com/gprossliner/kdotnet-dump.git
 cd kdotnet-dump
 pip install -e .
 ```
