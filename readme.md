@@ -1,80 +1,227 @@
-# getting dump
+# kdotnet-dump
 
-we get the test dump
+A tool to create and download .NET process dumps from Kubernetes pods, supporting both standard and hardened (non-root) containers.
 
-# analyse on macos
+## Purpose
 
-If we run just `dotnet-dump` on MacOS using the linux dump we get:
-`Analyzing Windows or Linux dumps not supported when running on MacOS`
+Creating .NET dumps from containers running in Kubernetes can be challenging, especially with:
+- **Non-root containers** - Can't install tools or write to most filesystem locations
+- **Restricted Pod Security Standards** - Limited privileges and capabilities
+- **Large dump files** - Can exceed 350MB, causing kubectl cp to fail
 
-To we will analyse it in a docker container, but we also need to use the same
-platform for it to work on Apple silicon:
+`kdotnet-dump` solves these problems by:
+1. Using ephemeral debug containers to isolate diagnostic tooling from application containers
+2. Automatically detecting container UID/GID and matching security context
+3. Downloading dotnet-dump dynamically (no need to bake it into images)
+4. Using chunked base64 transfer to handle large files reliably
+5. Working with `/proc/1/root/tmp` to share filesystem between debug and target containers
 
-`docker run --rm -it --platform linux/amd64  -v $(pwd):/dumps mcr.microsoft.com/dotnet/sdk:10.0 bash`
+## Installation
 
-Within the container we install dotnet-dump and start the analyse:
+```bash
+git clone https://github.com/gprossliner/kdotnet-dump.git
+cd kdotnet-dump
+```
+
+No additional dependencies required - just Python 3 and `kubectl`.
+
+## Command Line Arguments
 
 ```
+usage: entry.py [-h] [--strategy {same-container,debug-container}]
+                [-n NAMESPACE] [-l SELECTOR] [--dump-type {mini,heap,triage,full}]
+                [--dump-pid DUMP_PID] [--debug-image DEBUG_IMAGE]
+                [pod]
+
+positional arguments:
+  pod                   Pod name (or use --selector)
+
+optional arguments:
+  -h, --help            Show this help message and exit
+  
+  --strategy {same-container,debug-container}
+                        Strategy to create the dump (default: debug-container)
+                        - same-container: Runs dotnet-dump in the target container (requires root)
+                        - debug-container: Uses ephemeral debug container (works with non-root)
+  
+  -n, --namespace NAMESPACE
+                        Kubernetes namespace (default: default)
+  
+  -l, --selector SELECTOR
+                        Label selector to find pod (e.g., app=myapp)
+                        Use this instead of specifying pod name directly
+  
+  --dump-type {mini,heap,triage,full}
+                        Dump type (default: mini)
+                        - mini: Minimal dump with stacks and exception info
+                        - heap: Includes heap memory
+                        - triage: Minimal info for initial diagnosis
+                        - full: Complete memory dump (can be very large)
+  
+  --dump-pid DUMP_PID   Process ID to dump (default: 1)
+                        Usually PID 1 is the main application process
+  
+  --debug-image DEBUG_IMAGE
+                        Debug container image to use
+                        (default: mcr.microsoft.com/dotnet/sdk:latest)
+```
+
+## Examples
+
+### Basic Usage - Find pod by label selector
+
+```bash
+python3 entry.py -n production -l app=api --dump-type mini
+```
+
+This will:
+1. Find a pod with label `app=api` in namespace `production`
+2. Create an ephemeral debug container
+3. Download and run dotnet-dump to create a mini dump
+4. Download the dump to `./latest_dump`
+
+### Specify pod name directly
+
+```bash
+python3 entry.py -n production my-app-pod-12345 --dump-type full
+```
+
+### Create full heap dump for memory analysis
+
+```bash
+python3 entry.py -l app=api --dump-type heap
+```
+
+### Use custom debug image (e.g., specific .NET SDK version)
+
+```bash
+python3 entry.py -l app=api --debug-image mcr.microsoft.com/dotnet/sdk:8.0
+```
+
+### Use same-container strategy (requires root)
+
+```bash
+python3 entry.py -l app=api --strategy same-container --dump-type mini
+```
+
+## Analyzing Dumps
+
+### On Linux
+
+```bash
+dotnet tool install -g dotnet-dump
+dotnet-dump analyze ./latest_dump
+```
+
+### On macOS (using Docker)
+
+macOS doesn't support analyzing Linux dumps natively. Use a Docker container with the correct platform:
+
+```bash
+# For Apple Silicon (M1/M2/M3), specify linux/amd64 platform
+docker run --rm -it --platform linux/amd64 \
+  -v $(pwd):/dumps \
+  mcr.microsoft.com/dotnet/sdk:10.0 \
+  bash
+
+# Inside the container
 dotnet tool install dotnet-dump
-dotnet tool run dotnet-dump analyze /dumps/core_20260115_112448
-
-# we are now in dotnet-dump, to show the threads:
-clrthreads
-
-# this should show the list of threads
+dotnet tool run dotnet-dump analyze /dumps/latest_dump
 ```
 
-# manual test to dump in ephemeral pod:
-
-Start ephemeral pod:
-```sh
-kubectl -n energy-promv4 debug api-dd5cb7ccd-bkn86 --image mcr.microsoft.com/dotnet/sdk:10.0 -it --target api --share-processes  -- bash
+Common dotnet-dump commands:
+```
+clrthreads          # List managed threads
+clrstack            # Show managed stack trace
+dumpheap -stat      # Show heap statistics
+sos help            # Show all available commands
 ```
 
-```sh
-# install dotnet-dump
-dotnet tool install dotnet-dump
+## How It Works
 
-# set tmpdir for socket diagnostic socket and output file
-# it will be in the target container fs, so we need to use /proc/1/root to enter
-# the containers FS
-export TMPDIR=/proc/1/root/tmp
-dotnet tool run dotnet-dump collect --process-id=1 --output /proc/1/root/tmp/core_dump
+### Debug Container Strategy (Recommended)
 
-# check file
-ls -l /proc/1/root/tmp
+1. **Pod Discovery**: Finds target pod using label selector or name
+2. **Container Detection**: Identifies the default container and extracts UID/GID
+3. **Security Context Matching**: Creates debug container with same UID/GID as target
+4. **Shared Process Namespace**: Uses `--share-processes` to access target container's processes
+5. **Dump Creation**: Downloads dotnet-dump and creates dump in `/proc/1/root/tmp/dumps`
+6. **File Transfer**: Uses chunked base64 encoding to reliably download large files
+
+### Same Container Strategy
+
+Simpler but requires:
+- Container running as root
+- Writable `/tmp` directory
+- Works by installing dotnet-dump directly in the target container
+
+## Requirements
+
+### Kubernetes Cluster
+- Kubernetes 1.23+ (for ephemeral containers)
+- Kubernetes 1.28+ recommended (for UID/GID detection from status)
+
+### RBAC Permissions
+For debug-container strategy, the user needs:
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ephemeral-container-access
+  labels:
+    # This label causes the ClusterRole to be aggregated to the edit / admin role
+    rbac.authorization.k8s.io/aggregate-to-edit: "true"
+    rbac.authorization.k8s.io/aggregate-to-admin: "true"
+rules:
+- apiGroups: [""]
+  resources: ["pods/ephemeralcontainers"]
+  verbs: ["patch", "create", "get"]
 ```
 
-# testing on a hardened container (baseline)
+### Target Container Requirements
+- .NET application running (tested with .NET 8.0, 9.0, 10.0)
+- Writable `/tmp` directory OR mounted emptyDir volume
+  - For `readOnlyRootFilesystem: true`, mount emptyDir at `/tmp`
 
-When trying to run `dotnet tool`, we get this error: 
-`System.UnauthorizedAccessException: Access to the path '/.dotnet' is denied.`
+## Troubleshooting
 
-Setting a target path didn't help. So we managed to create the dump using
-download with wget (which is available in the sdk image)
+### "Access to the path '/.dotnet' is denied"
+This occurs in non-root containers. Use `--strategy debug-container` (default).
 
-Start debug container:
+### "Read-only file system" errors
+For containers with `readOnlyRootFilesystem: true`, ensure `/tmp` has an emptyDir mount:
+```yaml
+volumeMounts:
+- name: tmp
+  mountPath: /tmp
+volumes:
+- name: tmp
+  emptyDir: {}
 ```
-kubectl debug -n energy-promv4 api-f57cf89f7-bgvgs  --image=mcr.microsoft.com/dotnet/sdk:10.0  --target=api   --share-processes -it -- bash
+
+### Large files fail with websocket errors
+The tool automatically uses chunked transfer for reliability. If issues persist, the chunks are 10MB by default and can't be adjusted without code changes.
+
+### "No pods found with selector"
+Verify the label selector matches your pods:
+```bash
+kubectl get pods -l app=myapp -n your-namespace
 ```
 
-Run in container:
+## Testing
 
-```sh
-# see that we are not root, so we can't install a dotnet tool
-id
+Integration tests are available in the `tests/` directory:
 
-# download with wget
-wget "https://aka.ms/dotnet-dump/linux-x64" -O /tmp/dotnet-dump
-
-# set export dir for dotnet-dump to run:
-export DOTNET_BUNDLE_EXTRACT_BASE_DIR=/tmp/extracted
-
-# like before
-export TMPDIR=/proc/1/root/tmp
-chmod +x /tmp/dotnet-dump
-/tmp/dotnet-dump collect --process-id=1 --output /proc/1/root/tmp/core_dump
-
-# check file
-ls -l /proc/1/root/tmp/
+```bash
+pip install -r tests/requirements.txt
+pytest tests/test_entry.py -v
 ```
+
+Tests deploy sample applications and verify dump creation across different configurations:
+- Root vs non-root containers
+- Debian vs Alpine vs Chiseled images
+- With and without `readOnlyRootFilesystem`
+
+## License
+
+MIT
