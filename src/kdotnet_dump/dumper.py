@@ -5,6 +5,7 @@ import sys
 import os
 import json
 import time
+import shlex
 
 
 class Dumper:
@@ -17,6 +18,25 @@ class Dumper:
         self.strategy = strategy
         self.debug_image = debug_image
 
+    def _kubectl_command(self, args):
+        command = ["kubectl", *args]
+        # print(f"[kubectl] {shlex.join(command)}")
+        return command
+
+    def _kubectl_run(self, args, **kwargs):
+        try:
+            return subprocess.run(self._kubectl_command(args), **kwargs)
+        except FileNotFoundError:
+            print("Error: kubectl not found. Please install kubectl.", file=sys.stderr)
+            sys.exit(1)
+
+    def _kubectl_popen(self, args, **kwargs):
+        try:
+            return subprocess.Popen(self._kubectl_command(args), **kwargs)
+        except FileNotFoundError:
+            print("Error: kubectl not found. Please install kubectl.", file=sys.stderr)
+            sys.exit(1)
+
     def run(self):
         # Local args
         kube_ns = self.namespace
@@ -28,9 +48,8 @@ class Dumper:
             # Get pod by label selector
             print(f"Finding pod with selector '{self.selector}' in namespace '{kube_ns}'...")
             try:
-                result = subprocess.run(
+                result = self._kubectl_run(
                     [
-                        "kubectl",
                         "get",
                         "pods",
                         "-n",
@@ -62,13 +81,13 @@ class Dumper:
 
         # validate if pod exists and get pod details
         try:
-            result = subprocess.run(
-                ["kubectl", "get", "pod", "-n", kube_ns, kube_pod, "-o", "json"],
+            result = self._kubectl_run(
+                ["get", "pod", "-n", kube_ns, kube_pod, "-o", "json"],
                 check=True,
                 capture_output=True,
                 text=True,
             )
-            pod_data = json.loads(result.stdout)
+            self.pod_data = PodData(json.loads(result.stdout))
         except subprocess.CalledProcessError:
             print(
                 f"Error: Pod {kube_pod} in namespace {kube_ns} does not exist.", file=sys.stderr
@@ -79,54 +98,14 @@ class Dumper:
             sys.exit(1)
 
         # Extract default container name
-        containers = pod_data.get("spec", {}).get("containers", [])
-        if not containers:
-            print(f"Error: No containers found in pod {kube_pod}", file=sys.stderr)
-            sys.exit(1)
-
-        # Default container is the first one, or one with specific annotation
-        default_container = containers[0].get("name")
-        annotations = pod_data.get("metadata", {}).get("annotations", {})
-        if "kubectl.kubernetes.io/default-container" in annotations:
-            default_container = annotations["kubectl.kubernetes.io/default-container"]
-
+        default_container = self.pod_data.get_default_container()
 
         if container_name is None:
             print(f"Using default container: {default_container}")
             container_name = default_container
 
         # Extract UID/GID from status.containerStatuses (actual runtime values)
-        container_statuses = pod_data.get("status", {}).get("containerStatuses", [])
-        uid = None
-        gid = None
-
-        # Find the container status for the default container
-        for container_status in container_statuses:
-            if container_status.get("name") == container_name:
-                # Get user info from container status
-                user_info = container_status.get("user", {})
-                if "linux" in user_info:
-                    uid = user_info["linux"].get("uid")
-                    gid = user_info["linux"].get("gid")
-                break
-
-        # Fallback to spec if status doesn't have the info (old k8s versions)
-        if uid is None or gid is None:
-            container_spec = None
-            for container in containers:
-                if container.get("name") == container_name:
-                    container_spec = container
-                    break
-            
-            if container_spec:
-                security_context = container_spec.get("securityContext", {})
-                pod_security_context = pod_data.get("spec", {}).get("securityContext", {})
-                
-                if uid is None:
-                    uid = security_context.get("runAsUser") or pod_security_context.get("runAsUser")
-                if gid is None:
-                    gid = security_context.get("runAsGroup") or pod_security_context.get("runAsGroup")
-
+        uid, gid = self.pod_data.get_container_uid_gid(container_name)
         if uid:
             print(f"Container runs as UID: {uid}")
         if gid:
@@ -135,10 +114,7 @@ class Dumper:
             print("Container runs as root or UID/GID not explicitly set")
 
         # create a list of existing ephemeralContainers names
-        existing_ephemeral_containers = []
-        ephemeral_containers = pod_data.get("spec", {}).get("ephemeralContainers", [])
-        for ec in ephemeral_containers:
-            existing_ephemeral_containers.append(ec.get("name"))
+        existing_ephemeral_containers = self.pod_data.get_ephemeral_container_names()
 
         # prepare script
         ################################################################
@@ -180,28 +156,23 @@ class Dumper:
         # Execute the script in the container
         if strategy == "same-container":
             print(f"Executing script in pod {kube_pod} (namespace: {kube_ns})...")
-            try:
-                result = subprocess.run(
-                    ["kubectl", "exec", "-n", kube_ns, "-i", kube_pod, "--", "sh"],
-                    input=script_content,
-                    text=True,
+            result = self._kubectl_run(
+                ["exec", "-n", kube_ns, "-i", kube_pod, "--", "sh"],
+                input=script_content,
+                text=True,
+            )
+            if result.returncode != 0:
+                print(
+                    f"Error: kubectl exec failed with exit code {result.returncode}",
+                    file=sys.stderr,
                 )
-                if result.returncode != 0:
-                    print(
-                        f"Error: kubectl exec failed with exit code {result.returncode}",
-                        file=sys.stderr,
-                    )
-                    sys.exit(result.returncode)
-            except FileNotFoundError:
-                print("Error: kubectl not found. Please install kubectl.", file=sys.stderr)
-                sys.exit(1)
+                sys.exit(result.returncode)
 
         elif strategy == "debug-container":
             print(f"Creating debug container using image {self.debug_image}...")
             
             # Build kubectl debug command
             debug_cmd = [
-                "kubectl",
                 "debug",
                 "-n",
                 kube_ns,
@@ -235,7 +206,7 @@ class Dumper:
             
             try:
                 # kubectl debug doesn't stream output well with input=, so use stdin pipe
-                process = subprocess.Popen(
+                process = self._kubectl_popen(
                     debug_cmd,
                     stdin=subprocess.PIPE,
                     stdout=sys.stdout,
@@ -243,16 +214,13 @@ class Dumper:
                 )
                 # Send script and close stdin to trigger execution
                 process.communicate(input=script_content)
-                
+
                 if process.returncode != 0:
                     print(
                         f"Error: kubectl debug failed with exit code {process.returncode}",
                         file=sys.stderr,
                     )
                     sys.exit(process.returncode)
-            except FileNotFoundError:
-                print("Error: kubectl not found. Please install kubectl.", file=sys.stderr)
-                sys.exit(1)
             finally:
                 # Clean up temp file
                 if custom_file:
@@ -261,13 +229,13 @@ class Dumper:
             while True:
                 print("Waiting for debug container to complete...")
                 try:
-                    result = subprocess.run(
-                        ["kubectl", "get", "pod", "-n", kube_ns, kube_pod, "-o", "json"],
+                    result = self._kubectl_run(
+                        ["get", "pod", "-n", kube_ns, kube_pod, "-o", "json"],
                         check=True,
                         capture_output=True,
                         text=True,
                     )
-                    pod_data = json.loads(result.stdout)
+                    self.pod_data.refresh(json.loads(result.stdout))
                 except subprocess.CalledProcessError:
                     print(
                         f"Error: Pod {kube_pod} in namespace {kube_ns} does not exist.", file=sys.stderr
@@ -277,27 +245,17 @@ class Dumper:
                     print(f"Error: Failed to parse pod data: {e}", file=sys.stderr)
                     sys.exit(1)
 
-                ephemeral_containers = pod_data.get("status", {}).get("ephemeralContainerStatuses", [])
-                has_terminated = False
-                for ec in ephemeral_containers:
-                    name = ec.get("name")
-                    if name not in existing_ephemeral_containers:
-                        # check if terminated
-                        state = ec.get("state", {})
-                        if "terminated" in state:
-                            print(f"Debug container '{name}' has terminated.")
-                            has_terminated = True
-                            break
-                    else:
-                        continue
-                if has_terminated:
+                # get the new ephemeral name
+                debug_container_name = list(set(self.pod_data.get_ephemeral_container_names()) - set(existing_ephemeral_containers))[0]
+                if self.pod_data.has_ephemeral_container_terminated(debug_container_name):
+                    print("Debug container has terminated, proceeding to copy dump file...")
                     break
+                
                 else:
                     # no new debug container found yet
                     time.sleep(1)
                     continue
                 
-
         dump_file = dump_dir + "/latest_dump"
         local_file = "./latest_dump"
 
@@ -310,8 +268,8 @@ class Dumper:
             """Copy file from pod using kubectl cp (may fail with large files >350MB)"""
             print(f"Copying {remote_file} using kubectl cp...")
             try:
-                subprocess.run(
-                    ["kubectl", "cp", "--container", container, f"{namespace}/{pod}:{remote_file}", local_file],
+                self._kubectl_run(
+                    ["cp", "--container", container, f"{namespace}/{pod}:{remote_file}", local_file],
                     check=True,
                 )
                 print(f"Successfully copied to {local_file}")
@@ -330,7 +288,7 @@ class Dumper:
                 
                 # Use tar streaming: kubectl exec -- tar cf - file | tar xf -
                 kubectl_cmd = [
-                    "kubectl", "exec", "-n", namespace, pod,
+                    "exec", "-n", namespace, pod,
                     "--container", container,
                     "--", "tar", "cf", "-", "-C", remote_dir, remote_filename
                 ]
@@ -341,7 +299,7 @@ class Dumper:
                     cwd=".",
                 )
                 
-                kubectl_proc = subprocess.Popen(
+                kubectl_proc = self._kubectl_popen(
                     kubectl_cmd,
                     stdout=tar_extract.stdin,
                 )
@@ -380,11 +338,11 @@ class Dumper:
             try:
                 # Get file size first
                 size_cmd = [
-                    "kubectl", "exec", "-n", namespace, pod,
+                    "exec", "-n", namespace, pod,
                     "--container", container,
                     "--", "sh", "-c", f"stat -c %s '{remote_file}' 2>/dev/null || stat -f %z '{remote_file}'"
                 ]
-                result = subprocess.run(size_cmd, capture_output=True, text=True, check=True)
+                result = self._kubectl_run(size_cmd, capture_output=True, text=True, check=True)
                 total_size = int(result.stdout.strip())
                 print(f"Remote file size: {total_size} bytes ({total_size/1024/1024:.2f} MB)")
                 
@@ -400,7 +358,7 @@ class Dumper:
                         
                         # Read chunk using dd and base64 encode it to avoid binary issues over websocket
                         read_cmd = [
-                            "kubectl", "exec", "-n", namespace, pod,
+                            "exec", "-n", namespace, pod,
                             "--container", container,
                             "--", "sh", "-c",
                             f"dd if='{remote_file}' bs={bytes_to_read} skip=0 count=1 iflag=skip_bytes,count_bytes 2>/dev/null | base64"
@@ -409,7 +367,7 @@ class Dumper:
                         # Update dd skip parameter
                         read_cmd[-1] = f"dd if='{remote_file}' bs=1M skip={offset} count={bytes_to_read} iflag=skip_bytes,count_bytes 2>/dev/null | base64"
                         
-                        result = subprocess.run(read_cmd, capture_output=True, text=True, check=True)
+                        result = self._kubectl_run(read_cmd, capture_output=True, text=True, check=True)
                         
                         # Decode base64 and write to file
                         import base64
@@ -435,8 +393,88 @@ class Dumper:
                 sys.exit(1)
 
 
+        # start debug container for file transfer
+
 
         # Copy the file from pod
         # Choose one of: kubectl_cp, kubectl_tar_cp, kubectl_chunked_cp
         kubectl_chunked_cp(kube_ns, kube_pod, container_name, dump_file, local_file)
 
+class PodData:
+    def __init__(self, pod_data):
+        self.refresh(pod_data)
+
+    def refresh(self, pod_data):
+        self.pod_data = pod_data
+
+    def get_default_container(self):
+        # Extract default container name
+        containers = self.pod_data.get("spec", {}).get("containers", [])
+        if not containers:
+            print(f"Error: No containers found in pod {self.pod_data.get('metadata', {}).get('name', '')}", file=sys.stderr)
+            sys.exit(1)
+
+        # Default container is the first one, or one with specific annotation
+        default_container = containers[0].get("name")
+        annotations = self.pod_data.get("metadata", {}).get("annotations", {})
+        if "kubectl.kubernetes.io/default-container" in annotations:
+            default_container = annotations["kubectl.kubernetes.io/default-container"]
+
+        return default_container
+
+    def get_container_uid_gid(self, container_name):
+        container_statuses = self.pod_data.get("status", {}).get("containerStatuses", [])
+        uid = None
+        gid = None
+
+        # Find the container status for the default container
+        for container_status in container_statuses:
+            if container_status.get("name") == container_name:
+                # Get user info from container status
+                user_info = container_status.get("user", {})
+                if "linux" in user_info:
+                    uid = user_info["linux"].get("uid")
+                    gid = user_info["linux"].get("gid")
+                break
+
+        # Fallback to spec if status doesn't have the info (old k8s versions)
+        if uid is None or gid is None:
+            container_spec = None
+            for container in self.pod_data.get("spec", {}).get("containers", []):
+                if container.get("name") == container_name:
+                    container_spec = container
+                    break
+            
+            if container_spec:
+                security_context = container_spec.get("securityContext", {})
+                pod_security_context = self.pod_data.get("spec", {}).get("securityContext", {})
+                
+                if uid is None:
+                    uid = security_context.get("runAsUser") or pod_security_context.get("runAsUser")
+                if gid is None:
+                    gid = security_context.get("runAsGroup") or pod_security_context.get("runAsGroup")
+
+        return uid, gid
+    
+    def get_ephemeral_container_names(self):
+        names = []
+        ephemeral_containers = self.pod_data.get("spec", {}).get("ephemeralContainers", [])
+        for ec in ephemeral_containers:
+            names.append(ec.get("name"))
+        return names
+    
+    def has_ephemeral_container_terminated(self, container_name):
+        ephemeral_containers = self.pod_data.get("status", {}).get("ephemeralContainerStatuses", [])
+        for ec in ephemeral_containers:
+            name = ec.get("name")
+            if name != container_name:
+                continue
+
+            # check if terminated
+            state = ec.get("state", {})
+            if "terminated" in state:
+                print(f"Debug container '{name}' has terminated.")
+                return True
+            
+        return False
+    
