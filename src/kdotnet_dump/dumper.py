@@ -182,7 +182,7 @@ class Dumper:
             print(f"Executing script in pod {kube_pod} (namespace: {kube_ns})...")
             try:
                 result = subprocess.run(
-                    ["kubectl", "exec", "-n", kube_ns, "-i", kube_pod, "--", "bash"],
+                    ["kubectl", "exec", "-n", kube_ns, "-i", kube_pod, "--", "sh"],
                     input=script_content,
                     text=True,
                 )

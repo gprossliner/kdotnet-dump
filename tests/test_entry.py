@@ -38,6 +38,16 @@ def load_test_deployments():
     return deployments
 
 
+def build_test_cases():
+    """Build deployment/strategy test matrix."""
+    test_cases = []
+    for deployment in load_test_deployments():
+        test_cases.append({"deployment": deployment, "strategy": "debug-container"})
+        if deployment["name"].endswith("-root"):
+            test_cases.append({"deployment": deployment, "strategy": "same-container"})
+    return test_cases
+
+
 @pytest.fixture(scope="session")
 def ensure_deployments():
     """Ensure test deployments are created in the cluster"""
@@ -60,10 +70,16 @@ def ensure_deployments():
     # subprocess.run(["kubectl", "delete", "-f", str(TEST_MANIFEST)], check=False)
 
 
-@pytest.mark.parametrize("deployment", load_test_deployments(), ids=lambda d: d['name'])
-def test_dump_creation(deployment, ensure_deployments):
+@pytest.mark.parametrize(
+    "test_case",
+    build_test_cases(),
+    ids=lambda case: f"{case['deployment']['name']}[{case['strategy']}]",
+)
+def test_dump_creation(test_case, ensure_deployments):
     """Test dump creation for each deployment"""
-    
+
+    deployment = test_case["deployment"]
+    strategy = test_case["strategy"]
     selector = deployment['selector']
     name = deployment['name']
     
@@ -79,7 +95,7 @@ def test_dump_creation(deployment, ensure_deployments):
         [
             "python3", str(ENTRY_PY),
             "-l", selector,
-            "--strategy", "debug-container",
+            "--strategy", strategy,
             "--dump-type", "mini"  # Use mini for faster tests
         ],
         capture_output=True,

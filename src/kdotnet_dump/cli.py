@@ -7,7 +7,7 @@ import argparse
 try:
     from . import dumper
 except ImportError:
-    import dumper
+    import dumper # type: ignore
 
 def main():
     parser = argparse.ArgumentParser(
