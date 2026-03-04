@@ -124,10 +124,7 @@ class Dumper:
         dump_pid = self.dump_pid
         strategy = self.strategy
 
-        if strategy == "same-container":
-            dump_dir = "/tmp/dumps"
-        elif strategy == "debug-container":
-            dump_dir = f"/proc/{dump_pid}/root/tmp/dumps"
+        dump_dir = f"/proc/{dump_pid}/root/tmp/dumps"
 
         # Find remote.sh - it should be in the same package directory
         package_dir = os.path.dirname(os.path.abspath(__file__))
@@ -186,22 +183,13 @@ class Dumper:
             # Add custom security context if UID/GID is set
             custom_file = None
             if uid is not None and uid != 0:
-                custom_spec = { 
-                    "securityContext": {
-                        "runAsUser": uid,
-                        "runAsGroup": gid
-                    }
-                }
-
-                # Write custom spec to temp file
-                import tempfile
-                custom_file = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
-                json.dump(custom_spec, custom_file)
-                custom_file.close()
+                custom_file = self._debug_custom_file(uid, gid)
                 debug_cmd.extend(["--profile", "restricted"])
                 debug_cmd.extend(["--custom", custom_file.name])
                 print(f"Debug container will run as UID={uid}, GID={gid}")
-            
+            else:
+                debug_cmd.extend(["--profile", "general"])
+
             debug_cmd.extend(["--", "bash"])
             
             try:
@@ -224,7 +212,7 @@ class Dumper:
             finally:
                 # Clean up temp file
                 if custom_file:
-                    os.unlink(custom_file.name)
+                    custom_file.close()
 
             while True:
                 print("Waiting for debug container to complete...")
@@ -392,13 +380,123 @@ class Dumper:
                 print(f"Error: Failed to copy file: {e}", file=sys.stderr)
                 sys.exit(1)
 
+        # test if required tools are available for copying in the debuggee container
+        copy_container = container_name
+        dw_process = None
 
-        # start debug container for file transfer
+        if not self._check_container_tools(kube_ns, kube_pod, container_name, ["tar"]):
+            print("Required tools for file transfer are not available in the container.", file=sys.stderr)
+            print("We copy the file using an ephemeral debug container!", file=sys.stderr)
+          
+            # start debug container for file transfer
+            e_containers = self.pod_data.get_ephemeral_container_names()
+            # Build kubectl debug command
+            debug_cmd = [
+                "debug",
+                "-n",
+                kube_ns,
+                kube_pod,
+                f"--image={self.debug_image}",
+                f"--target={container_name}",
+                "--share-processes"
+            ]
+            
+            # Add custom security context if UID/GID is set
+            custom_file = None
+            if uid is not None and uid != 0:
+                custom_file = self._debug_custom_file(uid, gid)
+                debug_cmd.extend(["--profile", "restricted"])
+                debug_cmd.extend(["--custom", custom_file.name])
+                print(f"Debug container will run as UID={uid}, GID={gid}")
+            else:
+                debug_cmd.extend(["--profile", "general"])
+
+            debug_cmd.extend(["--", "bash", "-c", "sleep 1000"])  # Keep debug container running for file transfer
+            
+            try:
+                # kubectl debug doesn't stream output well with input=, so use stdin pipe
+                dw_process = self._kubectl_popen(
+                    debug_cmd,
+                    stdin=subprocess.PIPE,
+                    stdout=sys.stdout,
+                    text=True,
+                )
+
+                # sleep a bit to ensure debug container is up before sending the script
+                time.sleep(3)
+
+                # check debug container name
+                result = self._kubectl_run(
+                    ["get", "pod", "-n", kube_ns, kube_pod, "-o", "json"],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                self.pod_data.refresh(json.loads(result.stdout))
+                new_e_containers = self.pod_data.get_ephemeral_container_names()
+                debug_container_name = list(set(new_e_containers) - set(e_containers))[0]
+                print(f"Debug container started: {debug_container_name}")
+                copy_container = debug_container_name
+
+            finally:
+                # Clean up temp file
+                if custom_file:
+                    custom_file.close()
 
 
         # Copy the file from pod
         # Choose one of: kubectl_cp, kubectl_tar_cp, kubectl_chunked_cp
-        kubectl_chunked_cp(kube_ns, kube_pod, container_name, dump_file, local_file)
+        kubectl_chunked_cp(kube_ns, kube_pod, copy_container, dump_file, local_file)
+
+        if dw_process is not None:
+            # Send script and close stdin to trigger execution
+            dw_process.communicate(input="\n")
+        
+            if dw_process.returncode != 0:
+                print(
+                    f"Error: kubectl debug failed with exit code {dw_process.returncode}",
+                    file=sys.stderr,
+                )
+                sys.exit(dw_process.returncode)
+
+    def _check_container_tools(self, namespace:str, pod:str, container:str, tools:list):
+        check_script = (
+            "missing=''; "
+            "for t in " + " ".join(tools) + "; do "
+            "  p=$(command -v \"$t\" 2>/dev/null || true); "
+            "  if [ -z \"$p\" ] || [ ! -x \"$p\" ]; then missing=\"$missing $t\"; fi; "
+            "done; "
+            "if [ -n \"$missing\" ]; then "
+            "  echo \"Missing or not executable:$missing\"; exit 1; "
+            "fi"
+        )
+
+        try:
+            self._kubectl_run(
+                ["exec", "-n", namespace, pod, "--container", container, "--", "sh", "-c", check_script],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            return True
+        except subprocess.CalledProcessError as e:
+            msg = (e.stdout or "").strip() or (e.stderr or "").strip() or str(e)
+            return False
+
+    def _debug_custom_file(self, uid, gid):
+        custom_spec = { 
+            "securityContext": {
+                "runAsUser": uid,
+                "runAsGroup": gid
+            }
+        }
+
+        # Write custom spec to temp file
+        import tempfile
+        custom_file = tempfile.NamedTemporaryFile(mode='w', suffix='.json')
+        json.dump(custom_spec, custom_file)
+        custom_file.flush()
+        return custom_file
 
 class PodData:
     def __init__(self, pod_data):
