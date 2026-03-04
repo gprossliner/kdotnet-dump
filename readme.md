@@ -6,15 +6,18 @@ A tool to create and download .NET process dumps from Kubernetes pods, supportin
 
 Creating .NET dumps from containers running in Kubernetes can be challenging, especially with:
 - **Non-root containers** - Can't install tools or write to most filesystem locations
+- **Chiseled/distroless-style runtime containers** - Missing package managers and common shell tooling
 - **Restricted Pod Security Standards** - Limited privileges and capabilities
 - **Large dump files** - Can exceed 350MB, causing kubectl cp to fail
 
 `kdotnet-dump` solves these problems by:
 1. Using ephemeral debug containers to isolate diagnostic tooling from application containers
 2. Automatically detecting container UID/GID and matching security context
-3. Downloading dotnet-dump dynamically (no need to bake it into images)
-4. Using chunked base64 transfer to handle large files reliably
-5. Working with `/proc/1/root/tmp` to share filesystem between debug and target containers
+3. Automatically detecting and downloading `dotnet-dump` in the debug container (no need to bake it into app images)
+4. Use a ephemeral debug container to download if the debuggee container doesn't
+contain the required tools or a shell. This is automatically dedected.
+5. Using chunked base64 transfer to handle large files reliably
+6. Working with `/proc/1/root/tmp` to share filesystem between debug and target containers
 
 ## Installation
 
