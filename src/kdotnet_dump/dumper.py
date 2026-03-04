@@ -57,22 +57,33 @@ class Dumper:
                         "-l",
                         self.selector,
                         "-o",
-                        "jsonpath={.items[0].metadata.name}",
+                        "json",
                     ],
                     capture_output=True,
                     text=True,
                     check=True,
                 )
-                kube_pod = result.stdout.strip()
-                if not kube_pod:
+                pods_data = json.loads(result.stdout)
+                items = pods_data.get("items", [])
+                if not items:
                     print(
                         f"Error: No pods found with selector '{self.selector}' in namespace '{kube_ns}'",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
+                kube_pod = items[0].get("metadata", {}).get("name")
+                if not kube_pod:
+                    print(
+                        f"Error: Pod list returned no valid pod name for selector '{self.selector}' in namespace '{kube_ns}'",
                         file=sys.stderr,
                     )
                     sys.exit(1)
                 print(f"Found pod: {kube_pod}")
             except subprocess.CalledProcessError as e:
                 print(f"Error: Failed to find pod with selector: {e.stderr}", file=sys.stderr)
+                sys.exit(1)
+            except json.JSONDecodeError as e:
+                print(f"Error: Failed to parse pod list data: {e}", file=sys.stderr)
                 sys.exit(1)
         elif self.pod:
             kube_pod = self.pod
