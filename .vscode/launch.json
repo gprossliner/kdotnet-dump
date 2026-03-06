@@ -6,12 +6,12 @@
     "configurations": [
 
         {
-            "name": "Python Debugger: Current File with Arguments",
+            "name": "Python Debugger: test-chiseled-restricted",
             "type": "debugpy",
             "request": "launch",
-            "program": "${file}",
+            "program": "${workspaceFolder}/src/kdotnet_dump/cli.py",
             "console": "integratedTerminal",
-            "args": "-l app=test-noble-root --strategy=debug-container --dump-type mini"
+            "args": "-l app=test-chiseled-restricted --strategy=debug-container --dump-type mini"
         }
     ]
 }

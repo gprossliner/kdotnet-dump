@@ -5,7 +5,6 @@ import sys
 import os
 import json
 import time
-import shlex
 
 
 class Dumper:
@@ -20,6 +19,7 @@ class Dumper:
 
     def _kubectl_command(self, args):
         command = ["kubectl", *args]
+        # import shlex
         # print(f"[kubectl] {shlex.join(command)}")
         return command
 
@@ -39,21 +39,19 @@ class Dumper:
 
     def run(self):
         # Local args
-        kube_ns = self.namespace
-        kube_pod = None
         container_name = None
 
         # Determine pod name
         if self.selector:
             # Get pod by label selector
-            print(f"Finding pod with selector '{self.selector}' in namespace '{kube_ns}'...")
+            print(f"Finding pod with selector '{self.selector}' in namespace '{self.namespace}'...")
             try:
                 result = self._kubectl_run(
                     [
                         "get",
                         "pods",
                         "-n",
-                        kube_ns,
+                        self.namespace,
                         "-l",
                         self.selector,
                         "-o",
@@ -67,18 +65,18 @@ class Dumper:
                 items = pods_data.get("items", [])
                 if not items:
                     print(
-                        f"Error: No pods found with selector '{self.selector}' in namespace '{kube_ns}'",
+                        f"Error: No pods found with selector '{self.selector}' in namespace '{self.namespace}'",
                         file=sys.stderr,
                     )
                     sys.exit(1)
-                kube_pod = items[0].get("metadata", {}).get("name")
-                if not kube_pod:
+                self.pod = items[0].get("metadata", {}).get("name")
+                if not self.pod:
                     print(
-                        f"Error: Pod list returned no valid pod name for selector '{self.selector}' in namespace '{kube_ns}'",
+                        f"Error: Pod list returned no valid pod name for selector '{self.selector}' in namespace '{self.namespace}'",
                         file=sys.stderr,
                     )
                     sys.exit(1)
-                print(f"Found pod: {kube_pod}")
+                print(f"Found pod: {self.pod}")
             except subprocess.CalledProcessError as e:
                 print(f"Error: Failed to find pod with selector: {e.stderr}", file=sys.stderr)
                 sys.exit(1)
@@ -86,14 +84,14 @@ class Dumper:
                 print(f"Error: Failed to parse pod list data: {e}", file=sys.stderr)
                 sys.exit(1)
         elif self.pod:
-            kube_pod = self.pod
+            pass
         else:
             sys.exit(1)
 
         # validate if pod exists and get pod details
         try:
             result = self._kubectl_run(
-                ["get", "pod", "-n", kube_ns, kube_pod, "-o", "json"],
+                ["get", "pod", "-n", self.namespace, self.pod, "-o", "json"],
                 check=True,
                 capture_output=True,
                 text=True,
@@ -101,7 +99,7 @@ class Dumper:
             self.pod_data = PodData(json.loads(result.stdout))
         except subprocess.CalledProcessError:
             print(
-                f"Error: Pod {kube_pod} in namespace {kube_ns} does not exist.", file=sys.stderr
+                f"Error: Pod {self.pod} in namespace {self.namespace} does not exist.", file=sys.stderr
             )
             sys.exit(1)
         except json.JSONDecodeError as e:
@@ -117,12 +115,7 @@ class Dumper:
 
         # Extract UID/GID from status.containerStatuses (actual runtime values)
         uid, gid = self.pod_data.get_container_uid_gid(container_name)
-        if uid:
-            print(f"Container runs as UID: {uid}")
-        if gid:
-            print(f"Container runs as GID: {gid}")
-        if not uid and not gid:
-            print("Container runs as root or UID/GID not explicitly set")
+        print(f"Container '{container_name}' UID/GID: {uid}/{gid}")
 
         # create a list of existing ephemeralContainers names
         existing_ephemeral_containers = self.pod_data.get_ephemeral_container_names()
@@ -134,7 +127,6 @@ class Dumper:
         dump_type = self.dump_type
         dump_pid = self.dump_pid
         strategy = self.strategy
-
         dump_dir = f"/proc/{dump_pid}/root/tmp/dumps"
 
         # Find remote.sh - it should be in the same package directory
@@ -163,9 +155,9 @@ class Dumper:
 
         # Execute the script in the container
         if strategy == "same-container":
-            print(f"Executing script in pod {kube_pod} (namespace: {kube_ns})...")
+            print(f"Executing script in pod {self.pod} (namespace: {self.namespace})...")
             result = self._kubectl_run(
-                ["exec", "-n", kube_ns, "-i", kube_pod, "--", "sh"],
+                ["exec", "-n", self.namespace, "-i", self.pod, "--", "sh"],
                 input=script_content,
                 text=True,
             )
@@ -183,8 +175,8 @@ class Dumper:
             debug_cmd = [
                 "debug",
                 "-n",
-                kube_ns,
-                kube_pod,
+                self.namespace,
+                self.pod,
                 f"--image={self.debug_image}",
                 f"--target={container_name}",
                 "--share-processes",
@@ -197,7 +189,7 @@ class Dumper:
                 custom_file = self._debug_custom_file(uid, gid)
                 debug_cmd.extend(["--profile", "restricted"])
                 debug_cmd.extend(["--custom", custom_file.name])
-                print(f"Debug container will run as UID={uid}, GID={gid}")
+                # print(f"Debug container will run as UID={uid}, GID={gid}")
             else:
                 debug_cmd.extend(["--profile", "general"])
 
@@ -208,7 +200,8 @@ class Dumper:
                 process = self._kubectl_popen(
                     debug_cmd,
                     stdin=subprocess.PIPE,
-                    stdout=sys.stdout,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
                     text=True,
                 )
                 # Send script and close stdin to trigger execution
@@ -225,11 +218,12 @@ class Dumper:
                 if custom_file:
                     custom_file.close()
 
+            print("Waiting for debug container to complete", end="")
             while True:
-                print("Waiting for debug container to complete...")
+                print(".", end="", flush=True)
                 try:
                     result = self._kubectl_run(
-                        ["get", "pod", "-n", kube_ns, kube_pod, "-o", "json"],
+                        ["get", "pod", "-n", self.namespace, self.pod, "-o", "json"],
                         check=True,
                         capture_output=True,
                         text=True,
@@ -237,7 +231,7 @@ class Dumper:
                     self.pod_data.refresh(json.loads(result.stdout))
                 except subprocess.CalledProcessError:
                     print(
-                        f"Error: Pod {kube_pod} in namespace {kube_ns} does not exist.", file=sys.stderr
+                        f"Error: Pod {self.pod} in namespace {self.namespace} does not exist.", file=sys.stderr
                     )
                     sys.exit(1)
                 except json.JSONDecodeError as e:
@@ -247,6 +241,7 @@ class Dumper:
                 # get the new ephemeral name
                 debug_container_name = list(set(self.pod_data.get_ephemeral_container_names()) - set(existing_ephemeral_containers))[0]
                 if self.pod_data.has_ephemeral_container_terminated(debug_container_name):
+                    print("")
                     print("Debug container has terminated, proceeding to copy dump file...")
                     break
                 
@@ -345,6 +340,16 @@ class Dumper:
                 total_size = int(result.stdout.strip())
                 print(f"Remote file size: {total_size} bytes ({total_size/1024/1024:.2f} MB)")
                 
+                # get file md5sum for verification
+                md5_cmd = [
+                    "exec", "-n", namespace, pod,
+                    "--container", container,
+                    "--", "sh", "-c", f"md5sum '{remote_file}' 2>/dev/null || md5 -q '{remote_file}'"
+                ]
+                result = self._kubectl_run(md5_cmd, capture_output=True, text=True, check=True)
+                remote_md5 = result.stdout.strip().split()[0]
+                print(f"Remote file MD5: {remote_md5}")
+
                 # Open local file for writing
                 with open(local_file, 'wb') as f:
                     offset = 0
@@ -383,6 +388,17 @@ class Dumper:
                 else:
                     print(f"Warning: Size mismatch - expected {total_size}, got {local_size}", file=sys.stderr)
                     
+                # Verify file md5 by not using md5 (not available on windows) but using python's hashlib
+                import hashlib
+                md5_hash = hashlib.md5()
+                with open(local_file, "rb") as f:
+                    for chunk in iter(lambda: f.read(4096), b""):
+                        md5_hash.update(chunk)
+                local_md5 = md5_hash.hexdigest()
+                if local_md5 == remote_md5:
+                    print(f"MD5 verification successful: {local_md5}")
+                else:                    
+                    print(f"Warning: MD5 mismatch - expected {remote_md5}, got {local_md5}", file=sys.stderr)
             except subprocess.CalledProcessError as e:
                 print(f"Error: Command failed: {e}", file=sys.stderr)
                 print(f"stderr: {e.stderr}", file=sys.stderr)
@@ -395,9 +411,9 @@ class Dumper:
         copy_container = container_name
         dw_process = None
 
-        if not self._check_container_tools(kube_ns, kube_pod, container_name, ["tar"]):
+        if not self._check_container_tools(self.namespace, self.pod, container_name, ["tar"]):
             print("Required tools for file transfer are not available in the container.", file=sys.stderr)
-            print("We copy the file using an ephemeral debug container!", file=sys.stderr)
+            print("Start debug container for file transfer.", file=sys.stderr)
           
             # start debug container for file transfer
             e_containers = self.pod_data.get_ephemeral_container_names()
@@ -405,8 +421,8 @@ class Dumper:
             debug_cmd = [
                 "debug",
                 "-n",
-                kube_ns,
-                kube_pod,
+                self.namespace,
+                self.pod,
                 f"--image={self.debug_image}",
                 f"--target={container_name}",
                 "--share-processes"
@@ -418,18 +434,19 @@ class Dumper:
                 custom_file = self._debug_custom_file(uid, gid)
                 debug_cmd.extend(["--profile", "restricted"])
                 debug_cmd.extend(["--custom", custom_file.name])
-                print(f"Debug container will run as UID={uid}, GID={gid}")
+                # print(f"Debug container will run as UID={uid}, GID={gid}")
             else:
                 debug_cmd.extend(["--profile", "general"])
 
-            debug_cmd.extend(["--", "bash", "-c", "sleep 1000"])  # Keep debug container running for file transfer
+            debug_cmd.extend(["--", "sh", "-c", "while [ ! -f /tmp/stopfile ]; do sleep 1; done"])  # Keep debug container running for file transfer
             
             try:
                 # kubectl debug doesn't stream output well with input=, so use stdin pipe
                 dw_process = self._kubectl_popen(
                     debug_cmd,
                     stdin=subprocess.PIPE,
-                    stdout=sys.stdout,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
                     text=True,
                 )
 
@@ -438,7 +455,7 @@ class Dumper:
 
                 # check debug container name
                 result = self._kubectl_run(
-                    ["get", "pod", "-n", kube_ns, kube_pod, "-o", "json"],
+                    ["get", "pod", "-n", self.namespace, self.pod, "-o", "json"],
                     check=True,
                     capture_output=True,
                     text=True,
@@ -454,21 +471,25 @@ class Dumper:
                 if custom_file:
                     custom_file.close()
 
-
         # Copy the file from pod
         # Choose one of: kubectl_cp, kubectl_tar_cp, kubectl_chunked_cp
-        kubectl_chunked_cp(kube_ns, kube_pod, copy_container, dump_file, local_file)
+        kubectl_chunked_cp(self.namespace, self.pod, copy_container, dump_file, local_file)
 
         if dw_process is not None:
-            # Send script and close stdin to trigger execution
-            dw_process.communicate(input="\n")
-        
+            dw_process.communicate()
             if dw_process.returncode != 0:
                 print(
                     f"Error: kubectl debug failed with exit code {dw_process.returncode}",
                     file=sys.stderr,
                 )
                 sys.exit(dw_process.returncode)
+
+            # Signal debug container to stop
+            print("Signaling debug container to stop...")
+            self._kubectl_run(
+                ["exec", "-n", self.namespace, self.pod, "--container", copy_container, "--", "touch", "/tmp/stopfile"],
+                check=True,
+            )
 
     def _check_container_tools(self, namespace:str, pod:str, container:str, tools:list):
         check_script = (
@@ -491,7 +512,7 @@ class Dumper:
             )
             return True
         except subprocess.CalledProcessError as e:
-            msg = (e.stdout or "").strip() or (e.stderr or "").strip() or str(e)
+            # msg = (e.stdout or "").strip() or (e.stderr or "").strip() or str(e)
             return False
 
     def _debug_custom_file(self, uid, gid):
@@ -582,7 +603,6 @@ class PodData:
             # check if terminated
             state = ec.get("state", {})
             if "terminated" in state:
-                print(f"Debug container '{name}' has terminated.")
                 return True
             
         return False
