@@ -193,7 +193,7 @@ class Dumper:
                 debug_cmd.extend(["--custom", custom_file.name])
                 # print(f"Debug container will run as UID={uid}, GID={gid}")
             else:
-                debug_cmd.extend(["--profile", "general"])
+                debug_cmd.extend(["--profile", "baseline"])
 
             debug_cmd.extend(["--", "bash"])
             
@@ -439,7 +439,7 @@ class Dumper:
                 debug_cmd.extend(["--custom", custom_file.name])
                 # print(f"Debug container will run as UID={uid}, GID={gid}")
             else:
-                debug_cmd.extend(["--profile", "general"])
+                debug_cmd.extend(["--profile", "baseline"])
 
             debug_cmd.extend(["--", "sh", "-c", "while [ ! -f /tmp/stopfile ]; do sleep 1; done"])  # Keep debug container running for file transfer
             
