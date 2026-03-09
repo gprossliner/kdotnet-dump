@@ -5,6 +5,7 @@ import sys
 import os
 import json
 import time
+from contextlib import ExitStack, suppress
 
 
 class Dumper:
@@ -40,6 +41,13 @@ class Dumper:
             sys.exit(1)
 
     def run(self):
+        self._exit_stack = ExitStack()
+        try:
+            self._do_run()
+        finally:
+            self._exit_stack.close()
+
+    def _do_run(self):
         # Local args
         container_name = None
 
@@ -186,40 +194,35 @@ class Dumper:
             ]
             
             # Add custom security context if UID/GID is set
-            custom_file = None
+            custom_file_path = None
             if uid is not None and uid != 0:
-                custom_file = self._debug_custom_file(uid, gid)
+                custom_file_path = self._debug_custom_file(uid, gid)
                 debug_cmd.extend(["--profile", "restricted"])
-                debug_cmd.extend(["--custom", custom_file.name])
+                debug_cmd.extend(["--custom", custom_file_path])
                 # print(f"Debug container will run as UID={uid}, GID={gid}")
             else:
                 debug_cmd.extend(["--profile", "baseline"])
 
             debug_cmd.extend(["--", "bash"])
             
-            try:
-                # kubectl debug doesn't stream output well with input=, so use stdin pipe
-                redir = subprocess.PIPE if not self.verbose_output else None
-                process = self._kubectl_popen(
-                    debug_cmd,
-                    stdin=subprocess.PIPE,
-                    stdout=redir,
-                    stderr=redir,
-                    text=True,
-                )
-                # Send script and close stdin to trigger execution
-                process.communicate(input=script_content)
+            # kubectl debug doesn't stream output well with input=, so use stdin pipe
+            redir = subprocess.PIPE if not self.verbose_output else None
+            process = self._kubectl_popen(
+                debug_cmd,
+                stdin=subprocess.PIPE,
+                stdout=redir,
+                stderr=redir,
+                text=True,
+            )
+            # Send script and close stdin to trigger execution
+            process.communicate(input=script_content)
 
-                if process.returncode != 0:
-                    print(
-                        f"Error: kubectl debug failed with exit code {process.returncode}",
-                        file=sys.stderr,
-                    )
-                    sys.exit(process.returncode)
-            finally:
-                # Clean up temp file
-                if custom_file:
-                    custom_file.close()
+            if process.returncode != 0:
+                print(
+                    f"Error: kubectl debug failed with exit code {process.returncode}",
+                    file=sys.stderr,
+                )
+                sys.exit(process.returncode)
 
             print("Waiting for debug container to complete", end="")
             while True:
@@ -432,48 +435,43 @@ class Dumper:
             ]
             
             # Add custom security context if UID/GID is set
-            custom_file = None
+            custom_file_path = None
             if uid is not None and uid != 0:
-                custom_file = self._debug_custom_file(uid, gid)
+                custom_file_path = self._debug_custom_file(uid, gid)
                 debug_cmd.extend(["--profile", "restricted"])
-                debug_cmd.extend(["--custom", custom_file.name])
+                debug_cmd.extend(["--custom", custom_file_path])
                 # print(f"Debug container will run as UID={uid}, GID={gid}")
             else:
                 debug_cmd.extend(["--profile", "baseline"])
 
             debug_cmd.extend(["--", "sh", "-c", "while [ ! -f /tmp/stopfile ]; do sleep 1; done"])  # Keep debug container running for file transfer
             
-            try:
-                # kubectl debug doesn't stream output well with input=, so use stdin pipe
-                redir = subprocess.PIPE if not self.verbose_output else subprocess.DEVNULL
-                dw_process = self._kubectl_run(
-                    debug_cmd,
-                    stdin=subprocess.PIPE,
-                    stdout=redir,
-                    stderr=redir,
-                    text=True,
-                )
+            # kubectl debug doesn't stream output well with input=, so use stdin pipe
+            redir = subprocess.PIPE if not self.verbose_output else subprocess.DEVNULL
+            dw_process = self._kubectl_run(
+                debug_cmd,
+                stdin=subprocess.PIPE,
+                stdout=redir,
+                stderr=redir,
+                text=True,
+            )
 
-                # sleep a bit to ensure debug container is up before sending the script
-                time.sleep(3)
+            # sleep a bit to ensure debug container is up before sending the script
+            time.sleep(3)
 
-                # check debug container name
-                result = self._kubectl_run(
-                    ["get", "pod", "-n", self.namespace, self.pod, "-o", "json"],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                )
-                self.pod_data.refresh(json.loads(result.stdout))
-                new_e_containers = self.pod_data.get_ephemeral_container_names()
-                debug_container_name = list(set(new_e_containers) - set(e_containers))[0]
-                print(f"Debug container started: {debug_container_name}")
-                copy_container = debug_container_name
+            # check debug container name
+            result = self._kubectl_run(
+                ["get", "pod", "-n", self.namespace, self.pod, "-o", "json"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.pod_data.refresh(json.loads(result.stdout))
+            new_e_containers = self.pod_data.get_ephemeral_container_names()
+            debug_container_name = list(set(new_e_containers) - set(e_containers))[0]
+            print(f"Debug container started: {debug_container_name}")
+            copy_container = debug_container_name
 
-            finally:
-                # Clean up temp file
-                if custom_file:
-                    custom_file.close()
 
         # Copy the file from pod
         # Choose one of: kubectl_cp, kubectl_tar_cp, kubectl_chunked_cp
@@ -519,12 +517,18 @@ class Dumper:
             }
         }
 
-        # Write custom spec to temp file
         import tempfile
-        custom_file = tempfile.NamedTemporaryFile(mode='w', suffix='.json')
-        json.dump(custom_spec, custom_file)
-        custom_file.flush()
-        return custom_file
+        fd, custom_path = tempfile.mkstemp(suffix='.json')
+        with os.fdopen(fd, 'w') as custom_file:
+            json.dump(custom_spec, custom_file)
+            custom_file.flush()
+
+        def _cleanup_temp_file(path):
+            with suppress(FileNotFoundError, PermissionError):
+                os.remove(path)
+
+        self._exit_stack.callback(_cleanup_temp_file, custom_path)
+        return custom_path
 
 class PodData:
     def __init__(self, pod_data):
