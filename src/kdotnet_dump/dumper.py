@@ -415,7 +415,6 @@ class Dumper:
 
         # test if required tools are available for copying in the debuggee container
         copy_container = container_name
-        dw_process = None
 
         if not self._check_container_tools(self.namespace, self.pod, container_name, ["tar"]):
             print("Required tools for file transfer are not available in the container.", file=sys.stderr)
@@ -448,7 +447,7 @@ class Dumper:
             
             # kubectl debug doesn't stream output well with input=, so use stdin pipe
             redir = subprocess.PIPE if not self.verbose_output else subprocess.DEVNULL
-            dw_process = self._kubectl_run(
+            self._kubectl_run(
                 debug_cmd,
                 stdin=subprocess.PIPE,
                 stdout=redir,
@@ -471,17 +470,23 @@ class Dumper:
             debug_container_name = list(set(new_e_containers) - set(e_containers))[0]
             print(f"Debug container started: {debug_container_name}")
             copy_container = debug_container_name
+            self._exit_stack.callback(
+                self._stop_debug_transfer_container,
+                self.namespace,
+                self.pod,
+                copy_container,
+            )
 
 
         # Copy the file from pod
         # Choose one of: kubectl_cp, kubectl_tar_cp, kubectl_chunked_cp
         kubectl_chunked_cp(self.namespace, self.pod, copy_container, dump_file, local_file)
 
-        if dw_process is not None:
-            # Signal debug container to stop
-            print("Signaling debug container to stop...")
+    def _stop_debug_transfer_container(self, namespace, pod, container):
+        print("Signaling debug container to stop...")
+        with suppress(subprocess.CalledProcessError):
             self._kubectl_run(
-                ["exec", "-n", self.namespace, self.pod, "--container", copy_container, "--", "touch", "/tmp/stopfile"],
+                ["exec", "-n", namespace, pod, "--container", container, "--", "touch", "/tmp/stopfile"],
                 check=True,
             )
 
