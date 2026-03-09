@@ -13,6 +13,10 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent
 ENTRY_PY = PROJECT_ROOT / "src" / "kdotnet_dump" / "cli.py"
 TEST_MANIFEST = PROJECT_ROOT / "tests" / "manifest.yaml"
+TEST_NAMESPACES = [
+    "kdotnet-dump-test-baseline",
+    "kdotnet-dump-test-restricted",
+]
 
 
 def load_test_deployments():
@@ -24,6 +28,7 @@ def load_test_deployments():
     for doc in docs:
         if doc and doc.get('kind') == 'Deployment':
             name = doc['metadata']['name']
+            namespace = doc['metadata'].get('namespace', 'default')
             labels = doc['spec']['template']['metadata']['labels']
             # Get the first label for selector
             label_key = list(labels.keys())[0]
@@ -31,6 +36,7 @@ def load_test_deployments():
             selector = f"{label_key}={label_value}"
             deployments.append({
                 'name': name,
+                'namespace': namespace,
                 'selector': selector,
                 'labels': labels
             })
@@ -57,12 +63,22 @@ def ensure_deployments():
         capture_output=True
     )
     
-    # Wait for pods to be ready
-    subprocess.run(
-        ["kubectl", "wait", "--for=condition=ready", "pod", "--all", "--timeout=120s"],
-        check=True,
-        capture_output=True
-    )
+    # Wait for pods in each test namespace to be ready
+    for namespace in TEST_NAMESPACES:
+        subprocess.run(
+            [
+                "kubectl",
+                "wait",
+                "--for=condition=ready",
+                "pod",
+                "--all",
+                "-n",
+                namespace,
+                "--timeout=120s",
+            ],
+            check=True,
+            capture_output=True,
+        )
     
     yield
     
@@ -80,10 +96,11 @@ def test_dump_creation(test_case, ensure_deployments):
 
     deployment = test_case["deployment"]
     strategy = test_case["strategy"]
+    namespace = deployment['namespace']
     selector = deployment['selector']
     name = deployment['name']
     
-    print(f"\n=== Testing {name} with selector {selector} ===")
+    print(f"\n=== Testing {name} in namespace {namespace} with selector {selector} ===")
     
     # Clean up any existing dump file
     dump_file = PROJECT_ROOT / "latest_dump"
@@ -94,6 +111,7 @@ def test_dump_creation(test_case, ensure_deployments):
     result = subprocess.run(
         [
             "python3", str(ENTRY_PY),
+            "-n", namespace,
             "-l", selector,
             "--strategy", strategy,
             "--dump-type", "mini"  # Use mini for faster tests

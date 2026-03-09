@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import os
 import sys
 import argparse
 
@@ -54,6 +55,10 @@ def main():
         parser.print_help()
         sys.exit(1)
 
+    # check if env variable KDOTNET_DUMP_VERBOSE is set to a truthy value, and if so, set verbose_output to True
+    verbose_env = os.getenv("KDOTNET_DUMP_VERBOSE", "").lower()
+    verbose_output = verbose_env in ("1", "true", "yes", "on")
+
     dumper_instance = dumper.Dumper(
         namespace=args.namespace,
         pod=args.pod,
@@ -62,6 +67,7 @@ def main():
         dump_pid=args.dump_pid,
         strategy=args.strategy,
         debug_image=args.debug_image,
+        verbose_output=verbose_output,
     )
     dumper_instance.run()
     

@@ -1,7 +1,24 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kdotnet-dump-test-baseline
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/enforce-version: latest
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kdotnet-dump-test-restricted
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: test-noble-root
+  namespace: kdotnet-dump-test-baseline
 spec:
   replicas: 1
   selector:
@@ -27,6 +44,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: test-noble-restricted
+  namespace: kdotnet-dump-test-restricted
 spec:
   replicas: 1
   selector:
@@ -69,6 +87,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: test-alpine-root
+  namespace: kdotnet-dump-test-baseline
 spec:
   replicas: 1
   selector:
@@ -94,6 +113,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: test-alpine-restricted
+  namespace: kdotnet-dump-test-restricted
 spec:
   replicas: 1
   selector:
@@ -135,6 +155,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: test-alpine-restricted-readonlyfs
+  namespace: kdotnet-dump-test-restricted
 spec:
   replicas: 1
   selector:
@@ -183,6 +204,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: test-chiseled-restricted
+  namespace: kdotnet-dump-test-restricted
 spec:
   replicas: 1
   selector:

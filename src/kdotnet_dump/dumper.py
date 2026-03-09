@@ -8,7 +8,7 @@ import time
 
 
 class Dumper:
-    def __init__(self, namespace="", pod=None, selector=None, dump_type="mini", dump_pid="1", strategy="debug-container", debug_image="mcr.microsoft.com/dotnet/sdk:latest" ):
+    def __init__(self, namespace="", pod=None, selector=None, dump_type="mini", dump_pid="1", strategy="debug-container", debug_image="mcr.microsoft.com/dotnet/sdk:latest", verbose_output=False):
         self.namespace = namespace
         self.pod = pod
         self.selector = selector
@@ -16,11 +16,13 @@ class Dumper:
         self.dump_pid = dump_pid
         self.strategy = strategy
         self.debug_image = debug_image
+        self.verbose_output = verbose_output
 
     def _kubectl_command(self, args):
         command = ["kubectl", *args]
-        # import shlex
-        # print(f"[kubectl] {shlex.join(command)}")
+        if self.verbose_output:
+            import shlex
+            print(f"[kubectl] {shlex.join(command)}")
         return command
 
     def _kubectl_run(self, args, **kwargs):
@@ -197,11 +199,12 @@ class Dumper:
             
             try:
                 # kubectl debug doesn't stream output well with input=, so use stdin pipe
+                redir = subprocess.PIPE if not self.verbose_output else None
                 process = self._kubectl_popen(
                     debug_cmd,
                     stdin=subprocess.PIPE,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
+                    stdout=redir,
+                    stderr=redir,
                     text=True,
                 )
                 # Send script and close stdin to trigger execution
@@ -442,11 +445,12 @@ class Dumper:
             
             try:
                 # kubectl debug doesn't stream output well with input=, so use stdin pipe
-                dw_process = self._kubectl_popen(
+                redir = subprocess.PIPE if not self.verbose_output else subprocess.DEVNULL
+                dw_process = self._kubectl_run(
                     debug_cmd,
                     stdin=subprocess.PIPE,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
+                    stdout=redir,
+                    stderr=redir,
                     text=True,
                 )
 
@@ -476,14 +480,6 @@ class Dumper:
         kubectl_chunked_cp(self.namespace, self.pod, copy_container, dump_file, local_file)
 
         if dw_process is not None:
-            dw_process.communicate()
-            if dw_process.returncode != 0:
-                print(
-                    f"Error: kubectl debug failed with exit code {dw_process.returncode}",
-                    file=sys.stderr,
-                )
-                sys.exit(dw_process.returncode)
-
             # Signal debug container to stop
             print("Signaling debug container to stop...")
             self._kubectl_run(
