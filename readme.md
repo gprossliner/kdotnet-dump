@@ -43,7 +43,7 @@ No additional dependencies required - just Python 3 and `kubectl`.
 ```
 usage: kdotnet-dump [-h] [--strategy {same-container,debug-container}]
                 [-n NAMESPACE] [-l SELECTOR] [--dump-type {mini,heap,triage,full}]
-                [--dump-pid DUMP_PID] [--debug-image DEBUG_IMAGE]
+                [--dump-pid DUMP_PID] [--debug-image DEBUG_IMAGE] [-v]
                 [pod]
 
 positional arguments:
@@ -51,6 +51,7 @@ positional arguments:
 
 optional arguments:
   -h, --help            Show this help message and exit
+  -v, --version         Show kdotnet-dump version and exit
   
   --strategy {same-container,debug-container}
                         Strategy to create the dump (default: debug-container)
@@ -78,6 +79,10 @@ optional arguments:
                         Debug container image to use
                         (default: mcr.microsoft.com/dotnet/sdk:latest)
 ```
+
+When installed from PyPI/release artifacts, `-v/--version` prints the package version
+(for example `v0.1.3`).
+When run directly from source without an installed package, it prints `unknown`.
 
 ## Examples
 

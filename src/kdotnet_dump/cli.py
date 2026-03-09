@@ -3,6 +3,7 @@
 import os
 import sys
 import argparse
+from importlib.metadata import PackageNotFoundError, version
 
 # Support both package import and direct execution (like used in tests)
 try:
@@ -10,9 +11,25 @@ try:
 except ImportError:
     import dumper # type: ignore
 
+
+def _resolve_version() -> str:
+    try:
+        package_version = version("kdotnet-dump")
+        return f"v{package_version}"
+    except PackageNotFoundError:
+        return "unknown"
+
 def main():
     parser = argparse.ArgumentParser(
         description="Create and download a .NET dump from a Kubernetes pod"
+    )
+
+    parser.add_argument(
+        "-v",
+        "--version",
+        action="version",
+        version=f"%(prog)s {_resolve_version()}",
+        help="Show kdotnet-dump version and exit",
     )
 
     # add a "strategy" argument:
