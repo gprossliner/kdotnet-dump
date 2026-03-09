@@ -40,8 +40,7 @@ jobs:
 
     - name: Run integration tests
       run: |
-        cd tests
-        pytest test_entry.py -v -s --tb=short
+        pytest tests -v -s --tb=short
     
     - name: Upload test results
       if: always()

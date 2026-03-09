@@ -154,14 +154,18 @@ class Dumper:
             print(f"Error: remote.sh not found at {remote_sh_path}", file=sys.stderr)
             sys.exit(1)
 
-        # Prepare the script to send to the container
-        script_content = f"""dump_type="{dump_type}"
-    dump_pid="{dump_pid}"
-    dump_dir="{dump_dir}"
-    strategy="{strategy}"
+        # Normalize line endings to LF so shell parsing works even when files were
+        # checked out with CRLF on Windows.
+        remote_script = self._normalize_script_newlines(remote_script)
 
-    {remote_script}
-    """
+        # Prepare the script to send to the container
+        script_content = (
+            f'dump_type="{dump_type}"\n'
+            f'dump_pid="{dump_pid}"\n'
+            f'dump_dir="{dump_dir}"\n'
+            f'strategy="{strategy}"\n\n'
+            f"{remote_script}\n"
+        )
 
         # Execute the script in the container
         if strategy == "same-container":
@@ -489,6 +493,10 @@ class Dumper:
                 ["exec", "-n", namespace, pod, "--container", container, "--", "touch", "/tmp/stopfile"],
                 check=True,
             )
+
+    @staticmethod
+    def _normalize_script_newlines(script_text: str) -> str:
+        return script_text.replace("\r\n", "\n").replace("\r", "\n")
 
     def _check_container_tools(self, namespace:str, pod:str, container:str, tools:list):
         check_script = (

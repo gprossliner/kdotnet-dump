@@ -138,5 +138,6 @@ def test_dump_creation(test_case, ensure_deployments):
 
 
 if __name__ == "__main__":
-    # Allow running tests directly
-    pytest.main([__file__, "-v"])
+    # Allow running the full tests suite directly
+    tests_dir = Path(__file__).parent
+    pytest.main([str(tests_dir), "-v"])
