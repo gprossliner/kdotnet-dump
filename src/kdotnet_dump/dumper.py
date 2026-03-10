@@ -33,6 +33,18 @@ class Dumper:
             print("Error: kubectl not found. Please install kubectl.", file=sys.stderr)
             sys.exit(1)
 
+    def _kubectl_run_with_retry(self, args, retries=5, retry_delay_seconds=1, **kwargs):
+        attempt = 0
+        while True:
+            try:
+                return self._kubectl_run(args, **kwargs)
+            except subprocess.CalledProcessError:
+                if attempt >= retries:
+                    raise
+                attempt += 1
+                print(f"kubectl command failed, retrying ({attempt}/{retries})...")
+                time.sleep(retry_delay_seconds)
+
     def _kubectl_popen(self, args, **kwargs):
         try:
             return subprocess.Popen(self._kubectl_command(args), **kwargs)
@@ -381,7 +393,7 @@ class Dumper:
                         # Update dd skip parameter
                         read_cmd[-1] = f"dd if='{remote_file}' bs=1M skip={offset} count={bytes_to_read} iflag=skip_bytes,count_bytes 2>/dev/null | base64"
                         
-                        result = self._kubectl_run(read_cmd, capture_output=True, text=True, check=True)
+                        result = self._kubectl_run_with_retry(read_cmd, capture_output=True, text=True, check=True)
                         
                         # Decode base64 and write to file
                         import base64
