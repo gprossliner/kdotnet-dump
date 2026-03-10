@@ -351,35 +351,63 @@ class Dumper:
             """Copy file from pod in chunks using base64 encoding to avoid websocket issues"""
             print(f"Copying {remote_file} using chunked transfer (chunk size: {chunk_size//1024//1024}MB)...")
             
+            remote_compressed_file = f"{remote_file}.kdotnet.gz"
+            local_compressed_file = f"{local_file}.kdotnet.gz"
+
             try:
+                import base64
+                import gzip
+                import hashlib
+                import shutil
+
                 # Get file size first
                 size_cmd = [
                     "exec", "-n", namespace, pod,
                     "--container", container,
                     "--", "sh", "-c", f"stat -c %s '{remote_file}' 2>/dev/null || stat -f %z '{remote_file}'"
                 ]
-                result = self._kubectl_run(size_cmd, capture_output=True, text=True, check=True)
+                result = self._kubectl_run_with_retry(size_cmd, capture_output=True, text=True, check=True)
                 total_size = int(result.stdout.strip())
                 print(f"Remote file size: {total_size} bytes ({total_size/1024/1024:.2f} MB)")
+
+                print("Compressing remote dump file...")
+                compress_cmd = [
+                    "exec", "-n", namespace, pod,
+                    "--container", container,
+                    "--", "sh", "-c", f"rm -f '{remote_compressed_file}' && gzip -c '{remote_file}' > '{remote_compressed_file}'"
+                ]
+                self._kubectl_run_with_retry(compress_cmd, capture_output=True, text=True, check=True)
+
+                compressed_size_cmd = [
+                    "exec", "-n", namespace, pod,
+                    "--container", container,
+                    "--", "sh", "-c", f"stat -c %s '{remote_compressed_file}' 2>/dev/null || stat -f %z '{remote_compressed_file}'"
+                ]
+                result = self._kubectl_run_with_retry(compressed_size_cmd, capture_output=True, text=True, check=True)
+                compressed_size = int(result.stdout.strip())
+                print(f"Remote compressed size: {compressed_size} bytes ({compressed_size/1024/1024:.2f} MB)")
                 
                 # get file md5sum for verification
                 md5_cmd = [
                     "exec", "-n", namespace, pod,
                     "--container", container,
-                    "--", "sh", "-c", f"md5sum '{remote_file}' 2>/dev/null || md5 -q '{remote_file}'"
+                    "--", "sh", "-c", f"md5sum '{remote_compressed_file}' 2>/dev/null || md5 -q '{remote_compressed_file}'"
                 ]
-                result = self._kubectl_run(md5_cmd, capture_output=True, text=True, check=True)
+                result = self._kubectl_run_with_retry(md5_cmd, capture_output=True, text=True, check=True)
                 remote_md5 = result.stdout.strip().split()[0]
-                print(f"Remote file MD5: {remote_md5}")
+                print(f"Remote compressed MD5: {remote_md5}")
+
+                if os.path.exists(local_compressed_file):
+                    os.remove(local_compressed_file)
 
                 # Open local file for writing
-                with open(local_file, 'wb') as f:
+                with open(local_compressed_file, 'wb') as f:
                     offset = 0
                     chunk_num = 0
                     
-                    while offset < total_size:
+                    while offset < compressed_size:
                         chunk_num += 1
-                        bytes_to_read = min(chunk_size, total_size - offset)
+                        bytes_to_read = min(chunk_size, compressed_size - offset)
                         # print(f"Downloading chunk {chunk_num} (offset {offset}, size {bytes_to_read} bytes)...")
                         
                         # Read chunk using dd and base64 encode it to avoid binary issues over websocket
@@ -387,33 +415,28 @@ class Dumper:
                             "exec", "-n", namespace, pod,
                             "--container", container,
                             "--", "sh", "-c",
-                            f"dd if='{remote_file}' bs={bytes_to_read} skip=0 count=1 iflag=skip_bytes,count_bytes 2>/dev/null | base64"
+                            f"dd if='{remote_compressed_file}' bs=1M skip={offset} count={bytes_to_read} iflag=skip_bytes,count_bytes 2>/dev/null | base64"
                         ]
-                        
-                        # Update dd skip parameter
-                        read_cmd[-1] = f"dd if='{remote_file}' bs=1M skip={offset} count={bytes_to_read} iflag=skip_bytes,count_bytes 2>/dev/null | base64"
                         
                         result = self._kubectl_run_with_retry(read_cmd, capture_output=True, text=True, check=True)
                         
-                        # Decode base64 and write to file
-                        import base64
+                        # Decode base64 and write compressed bytes
                         chunk_data = base64.b64decode(result.stdout)
                         f.write(chunk_data)
                         
                         offset += len(chunk_data)
-                        print(f"Progress: {offset}/{total_size} bytes ({100*offset//total_size}%)")
+                        print(f"Progress: {offset}/{compressed_size} bytes ({100*offset//compressed_size}%)")
                 
-                # Verify file size
-                local_size = os.path.getsize(local_file)
-                if local_size == total_size:
-                    print(f"Successfully copied to {local_file} ({local_size} bytes)")
+                # Verify compressed file size
+                local_compressed_size = os.path.getsize(local_compressed_file)
+                if local_compressed_size == compressed_size:
+                    print(f"Successfully copied compressed file to {local_compressed_file} ({local_compressed_size} bytes)")
                 else:
-                    print(f"Warning: Size mismatch - expected {total_size}, got {local_size}", file=sys.stderr)
+                    print(f"Warning: Size mismatch - expected {compressed_size}, got {local_compressed_size}", file=sys.stderr)
                     
-                # Verify file md5 by not using md5 (not available on windows) but using python's hashlib
-                import hashlib
+                # Verify compressed file md5 by using python's hashlib (cross-platform)
                 md5_hash = hashlib.md5()
-                with open(local_file, "rb") as f:
+                with open(local_compressed_file, "rb") as f:
                     for chunk in iter(lambda: f.read(4096), b""):
                         md5_hash.update(chunk)
                 local_md5 = md5_hash.hexdigest()
@@ -421,6 +444,17 @@ class Dumper:
                     print(f"MD5 verification successful: {local_md5}")
                 else:                    
                     print(f"Warning: MD5 mismatch - expected {remote_md5}, got {local_md5}", file=sys.stderr)
+
+                # Decompress locally using Python gzip (cross-platform, no system dependency)
+                print("Decompressing downloaded file...")
+                with gzip.open(local_compressed_file, "rb") as src, open(local_file, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+
+                local_size = os.path.getsize(local_file)
+                if local_size == total_size:
+                    print(f"Successfully copied to {local_file} ({local_size} bytes)")
+                else:
+                    print(f"Warning: Decompressed size mismatch - expected {total_size}, got {local_size}", file=sys.stderr)
             except subprocess.CalledProcessError as e:
                 print(f"Error: Command failed: {e}", file=sys.stderr)
                 print(f"stderr: {e.stderr}", file=sys.stderr)
@@ -428,11 +462,25 @@ class Dumper:
             except Exception as e:
                 print(f"Error: Failed to copy file: {e}", file=sys.stderr)
                 sys.exit(1)
+            finally:
+                with suppress(subprocess.CalledProcessError):
+                    self._kubectl_run(
+                        [
+                            "exec", "-n", namespace, pod,
+                            "--container", container,
+                            "--", "sh", "-c", f"rm -f '{remote_compressed_file}'"
+                        ],
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                    )
+                with suppress(FileNotFoundError):
+                    os.remove(local_compressed_file)
 
         # test if required tools are available for copying in the debuggee container
         copy_container = container_name
 
-        if not self._check_container_tools(self.namespace, self.pod, container_name, ["tar"]):
+        if not self._check_container_tools(self.namespace, self.pod, container_name, ["tar", "gzip"]):
             print("Required tools for file transfer are not available in the container.", file=sys.stderr)
             print("Start debug container for file transfer.", file=sys.stderr)
           
@@ -530,8 +578,7 @@ class Dumper:
                 text=True,
             )
             return True
-        except subprocess.CalledProcessError as e:
-            # msg = (e.stdout or "").strip() or (e.stderr or "").strip() or str(e)
+        except subprocess.CalledProcessError:
             return False
 
     def _debug_custom_file(self, uid, gid):
